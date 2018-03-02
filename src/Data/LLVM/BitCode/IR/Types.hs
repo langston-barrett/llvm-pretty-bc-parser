@@ -12,6 +12,7 @@ import Data.LLVM.BitCode.Record
 import Text.LLVM.AST
 
 import Control.Monad (when,unless,mplus,(<=<))
+import qualified Data.ByteString as B (pack)
 import Data.List (sortBy)
 import Data.Maybe (catMaybes)
 import Data.Ord (comparing)
@@ -163,7 +164,7 @@ parseTypeBlockEntry (fromEntry -> Just r) = case recordCode r of
 
   19 -> label "TYPE_CODE_STRUCT_NAME" $ do
     name <- label "struct name" $ parseField r 0 cstring
-        `mplus` parseFields r 0 char
+        `mplus` fmap B.pack (parseFields r 0 char)
     setTypeName name
     noType
 

@@ -16,10 +16,10 @@ import Control.Monad (mplus,mzero,foldM,(<=<),when)
 import Control.Monad.ST (runST,ST)
 import Data.Array.ST (newArray,readArray,MArray,STUArray)
 import Data.Bits (shiftL,shiftR,testBit)
-import Data.Char (chr)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Word (Word32,Word64)
 import qualified Data.Map as Map
+import qualified Data.ByteString as S
 
 #if __GLASGOW_HASKELL__ >= 704
 import Data.Array.Unsafe (castSTUArray)
@@ -262,8 +262,8 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
   9 -> label "CST_CODE_CSTRING" $ do
     ty     <- getTy
     values <- parseField r 0 cstring
-        `mplus` parseFields r 0 (fieldChar6 ||| char)
-    return (getTy, Typed ty (ValString (values ++ [chr 0])):cs)
+        `mplus` fmap S.pack (parseFields r 0 (fieldChar6 ||| char))
+    return (getTy, Typed ty (ValString (S.snoc values 0)):cs)
 
   -- [opcode,opval,opval]
   10 -> label "CST_CODE_CE_BINOP" $ do
@@ -342,10 +342,10 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
         alignStack = (flags `shiftR` 1) == 1
 
     alen <- field 1 numeric
-    asm  <- parseSlice r 2 alen char
+    asm  <- S.pack <$> parseSlice r 2 alen char
 
     clen <- field (2+alen) numeric
-    cst  <- parseSlice r (3+alen) clen char
+    cst  <- S.pack <$> parseSlice r (3+alen) clen char
 
     return (getTy, Typed ty (ValAsm sideEffect alignStack asm cst):cs)
 
@@ -407,8 +407,8 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
     when (3 + asmStrSize + constStrSize > len)
          (fail "Invalid record")
 
-    asmStr   <- parseSlice r  2               asmStrSize   char
-    constStr <- parseSlice r (3 + asmStrSize) constStrSize char
+    asmStr   <- S.pack <$> parseSlice r  2               asmStrSize   char
+    constStr <- S.pack <$> parseSlice r (3 + asmStrSize) constStrSize char
 
     ty <- getTy
     let val = ValAsm hasSideEffects isAlignStack asmStr constStr

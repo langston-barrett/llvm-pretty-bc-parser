@@ -3,6 +3,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -13,6 +14,8 @@ import Text.LLVM.PP
 
 import Control.Applicative (Alternative(..))
 import Control.Monad.Fix (MonadFix)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as Char8 (pack)
 import Data.Maybe (fromMaybe)
 import Data.Typeable (Typeable)
 import Data.Word ( Word32 )
@@ -83,7 +86,7 @@ data ParseState = ParseState
   , psMdRefs        :: MdRefTable
   , psFunProtos     :: Seq.Seq FunProto
   , psNextResultId  :: !Int
-  , psTypeName      :: Maybe String
+  , psTypeName      :: Maybe ByteString
   , psNextTypeId    :: !Int
   , psLastLoc       :: Maybe PDebugLoc
   , psKinds         :: !KindTable
@@ -206,10 +209,10 @@ getTypeName  = Parse $ do
       return tn
     Nothing -> do
       set ps { psNextTypeId = psNextTypeId ps + 1 }
-      return (show (psNextTypeId ps))
+      return (Char8.pack (show (psNextTypeId ps)))
   return (Ident str)
 
-setTypeName :: String -> Parse ()
+setTypeName :: ByteString -> Parse ()
 setTypeName name = Parse $ do
   ps <- get
   set ps { psTypeName = Just name }
@@ -392,10 +395,10 @@ data FunProto = FunProto
   { protoType  :: Type
   , protoLinkage :: Maybe Linkage
   , protoGC    :: Maybe GC
-  , protoName  :: String
+  , protoName  :: ByteString
   , protoIndex :: Int
-  , protoSect  :: Maybe String
-  , protoComdat :: Maybe String
+  , protoSect  :: Maybe ByteString
+  , protoComdat :: Maybe ByteString
   } deriving (Show)
 
 -- | Push a function prototype on to the prototype stack.
@@ -512,7 +515,7 @@ getTypeId n = do
 
 -- Value Symbol Table ----------------------------------------------------------
 
-type SymName = Either String Int
+type SymName = Either ByteString Int
 
 type ValueSymtab = Map.Map SymTabEntry SymName
 
@@ -522,8 +525,8 @@ data SymTabEntry
   | SymTabFNEntry !Int
     deriving (Eq,Ord,Show)
 
-renderName :: SymName -> String
-renderName  = either id show
+renderName :: SymName -> ByteString
+renderName  = either id (Char8.pack . show)
 
 mkBlockLabel :: SymName -> BlockLabel
 mkBlockLabel  = either (Named . Ident) Anon
@@ -531,21 +534,21 @@ mkBlockLabel  = either (Named . Ident) Anon
 emptyValueSymtab :: ValueSymtab
 emptyValueSymtab  = Map.empty
 
-addEntry :: Int -> String -> ValueSymtab -> ValueSymtab
+addEntry :: Int -> ByteString -> ValueSymtab -> ValueSymtab
 addEntry i n = Map.insert (SymTabEntry i) (Left n)
 
-addBBEntry :: Int -> String -> ValueSymtab -> ValueSymtab
+addBBEntry :: Int -> ByteString -> ValueSymtab -> ValueSymtab
 addBBEntry i n = Map.insert (SymTabBBEntry i) (Left n)
 
 addBBAnon :: Int -> Int -> ValueSymtab -> ValueSymtab
 addBBAnon i n = Map.insert (SymTabBBEntry i) (Right n)
 
-addFNEntry :: Int -> Int -> String -> ValueSymtab -> ValueSymtab
+addFNEntry :: Int -> Int -> ByteString -> ValueSymtab -> ValueSymtab
 -- TODO: do we ever need to be able to look up the offset?
 addFNEntry i _o n = Map.insert (SymTabFNEntry i) (Left n)
 
 -- | Lookup the name of an entry. Returns @Nothing@ when it's not present.
-entryNameMb :: Int -> Parse (Maybe String)
+entryNameMb :: Int -> Parse (Maybe ByteString)
 entryNameMb n = do
   symtab <- getValueSymtab
   return $! fmap renderName
@@ -553,7 +556,7 @@ entryNameMb n = do
             Map.lookup (SymTabFNEntry n) symtab
 
 -- | Lookup the name of an entry.
-entryName :: Int -> Parse String
+entryName :: Int -> Parse ByteString
 entryName n = do
   mentry <- entryNameMb n
   case mentry of
@@ -609,7 +612,7 @@ addTypeSymbol ix n ts = ts
 -- Metadata Kind Table ---------------------------------------------------------
 
 data KindTable = KindTable
-  { ktNames :: Map.Map Int String
+  { ktNames :: Map.Map Int ByteString
   } deriving (Show)
 
 emptyKindTable :: KindTable
@@ -623,13 +626,13 @@ emptyKindTable  = KindTable
     ]
   }
 
-addKind :: Int -> String -> Parse ()
+addKind :: Int -> ByteString -> Parse ()
 addKind kind name = Parse $ do
   ps <- get
   let KindTable { .. } = psKinds ps
   set $! ps { psKinds = KindTable { ktNames = Map.insert kind name ktNames } }
 
-getKind :: Int -> Parse String
+getKind :: Int -> Parse ByteString
 getKind kind = Parse $ do
   ps <- get
   let KindTable { .. } = psKinds ps

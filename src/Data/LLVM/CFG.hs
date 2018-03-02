@@ -29,6 +29,9 @@ import           Control.Applicative
 
 import           Control.Arrow
 
+import           Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as Char8 (pack)
+
 import qualified Data.Graph.Inductive.Query.Dominators as Dom
 import qualified Data.Graph.Inductive                  as G
 import qualified Data.Map                              as M
@@ -91,7 +94,7 @@ data CFG = CFG
   , pdoms :: [(BBId, [BBId])]
   }
 
-dummyExitName :: String
+dummyExitName :: ByteString
 dummyExitName = "_dummy_exit"
 
 -- | Builds the control-flow graph of a function.  Assumes that the entry node
@@ -159,7 +162,7 @@ buildCFG bs = cfg
 --           trace ("relabel: mid = " ++ show mid)
 --           $
           let (s', nm) = case mid of
-                           Nothing ->  (s + 1, Named $ Ident $ "__anon_" ++ show s)
+                           Nothing ->  (s + 1, Named $ Ident $ "__anon_" `mappend` Char8.pack (show s))
                            Just nm' -> (s, nm')
               bbid     = (BBId n, nm)
           in

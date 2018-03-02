@@ -1,6 +1,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Data.LLVM.BitCode.IR.Function where
 
@@ -21,6 +22,9 @@ import Data.Bits (shiftR,bit,shiftL,testBit,(.&.),(.|.),complement)
 import Data.Int (Int32)
 import Data.Maybe (isJust)
 import Data.Word (Word32)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as Char8 (pack)
+import qualified Data.ByteString.UTF8 as UTF8 (toString)
 import qualified Data.Foldable as F
 import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
@@ -106,11 +110,11 @@ finalizeDeclare fp = case protoType fp of
 type DefineList = Seq.Seq PartialDefine
 
 -- | A define with a list of statements for a body, instead of a list of basic
--- bocks.
+-- blocks.
 data PartialDefine = PartialDefine
   { partialLinkage  :: Maybe Linkage
   , partialGC       :: Maybe GC
-  , partialSection  :: Maybe String
+  , partialSection  :: Maybe ByteString
   , partialRetType  :: Type
   , partialName     :: Symbol
   , partialArgs     :: [Typed Ident]
@@ -121,7 +125,7 @@ data PartialDefine = PartialDefine
   , partialSymtab   :: ValueSymtab
   , partialMetadata :: Map.Map PKindMd PValMd
   , partialGlobalMd :: [PartialUnnamedMd]
-  , partialComdatName   :: Maybe String
+  , partialComdatName   :: Maybe ByteString
   } deriving (Show)
 
 -- | Generate a partial function definition from a function prototype.
@@ -237,7 +241,7 @@ nameNextValue :: Type -> Parse Ident
 nameNextValue ty = do
   vs   <- getValueTable
   let nextId = valueNextId vs
-  name <- entryName nextId `mplus` (show <$> nextResultId)
+  name <- entryName nextId `mplus` (Char8.pack . show <$> nextResultId)
   let i   = Ident name
       tv  = Typed ty (ValIdent i)
   setValueTable (addValue tv vs)
@@ -331,7 +335,7 @@ parseFunctionBlock unnamedGlobals ents =
   -- pop the function prototype off of the internal stack
   proto <- popFunProto
 
-  label (protoName proto) $ withValueSymtab symtab $ do
+  label (UTF8.toString (protoName proto)) $ withValueSymtab symtab $ do
 
     -- generate the initial partial definition
     pd  <- emptyPartialDefine proto

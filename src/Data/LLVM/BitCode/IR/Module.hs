@@ -19,6 +19,10 @@ import Text.LLVM.AST
 import Control.Monad (foldM,guard,when,forM_)
 import Data.List (sortBy)
 import Data.Ord (comparing)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as S (pack)
+import qualified Data.ByteString.Char8 as Char8 (unpack)
+import qualified Data.ByteString.UTF8 as UTF8 (lines)
 import qualified Data.Foldable as F
 import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
@@ -34,13 +38,13 @@ data PartialModule = PartialModule
   , partialDeclares   :: DeclareList
   , partialDataLayout :: DataLayout
   , partialInlineAsm  :: InlineAsm
-  , partialComdat     :: Seq.Seq (String,SelectionKind)
+  , partialComdat     :: Seq.Seq (ByteString, SelectionKind)
   , partialAliasIx    :: !Int
   , partialAliases    :: AliasList
   , partialNamedMd    :: [NamedMd]
   , partialUnnamedMd  :: [PartialUnnamedMd]
-  , partialSections   :: Seq.Seq String
-  , partialSourceName :: !(Maybe String)
+  , partialSections   :: Seq.Seq ByteString
+  , partialSourceName :: !(Maybe ByteString)
   }
 
 emptyPartialModule :: PartialModule
@@ -170,15 +174,15 @@ parseModuleBlockEntry pm (moduleCodeTriple -> Just _) = do
 
 parseModuleBlockEntry pm (moduleCodeDatalayout -> Just r) = do
   -- MODULE_CODE_DATALAYOUT
-  layout <- parseFields r 0 char
+  layout <- Char8.unpack . S.pack <$> parseFields r 0 char
   case parseDataLayout layout of
     Nothing -> fail ("unable to parse data layout: ``" ++ layout ++ "''")
     Just dl -> return (pm { partialDataLayout = dl })
 
 parseModuleBlockEntry pm (moduleCodeAsm -> Just r) = do
   -- MODULE_CODE_ASM
-  asm <- parseFields r 0 char
-  return pm { partialInlineAsm = lines asm }
+  asm <- S.pack <$> parseFields r 0 char
+  return pm { partialInlineAsm = UTF8.lines asm }
 
 parseModuleBlockEntry pm (abbrevDef -> Just _) = do
   -- skip abbreviation definitions
@@ -213,14 +217,14 @@ parseModuleBlockEntry pm (moduleCodeVersion -> Just r) = do
   return pm
 
 parseModuleBlockEntry pm (moduleCodeSectionname -> Just r) = do
-  name <- parseFields r 0 char
+  name <- S.pack <$> parseFields r 0 char
   return pm { partialSections = partialSections pm Seq.|> name }
 
 parseModuleBlockEntry pm (moduleCodeComdat -> Just r) = do
   -- MODULE_CODE_COMDAT
   when (length (recordFields r) < 2) (fail "Invalid record (MODULE_CODE_COMDAT)")
   kindVal <- parseField r 0 numeric
-  name <- parseFields r 2 char
+  name <- S.pack <$> parseFields r 2 char
   kind <- case kindVal :: Int of
             1  -> pure ComdatAny
             2  -> pure ComdatExactMatch

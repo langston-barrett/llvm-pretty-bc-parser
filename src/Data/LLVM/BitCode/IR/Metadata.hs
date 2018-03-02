@@ -28,8 +28,8 @@ import Data.List (mapAccumL)
 import Data.Maybe (fromMaybe)
 import Data.Bits (shiftR, testBit, shiftL)
 import Data.Word (Word32,Word64)
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as S
-import qualified Data.ByteString.Char8 as Char8 (unpack)
 import qualified Data.Map as Map
 
 
@@ -74,10 +74,10 @@ nameNode fnLocal isDistinct ix mt = mt
   , mtNextNode = mtNextNode mt + 1
   }
 
-addString :: String -> MetadataTable -> MetadataTable
+addString :: ByteString -> MetadataTable -> MetadataTable
 addString str = snd . addMetadata (ValMdString str)
 
-addStrings :: [String] -> MetadataTable -> MetadataTable
+addStrings :: [ByteString] -> MetadataTable -> MetadataTable
 addStrings strs mt = foldl (flip addString) mt strs
 
 addLoc :: Bool -> PDebugLoc -> MetadataTable -> MetadataTable
@@ -124,11 +124,11 @@ mdNodeRef cxt mt ix =
   where
   prj (_,_,x) = x
 
-mdString :: [String] -> MetadataTable -> Int -> String
+mdString :: [String] -> MetadataTable -> Int -> ByteString
 mdString cxt mt ix =
   fromMaybe (throw (BadValueRef cxt ix)) (mdStringOrNull cxt mt ix)
 
-mdStringOrNull :: [String] -> MetadataTable -> Int -> Maybe String
+mdStringOrNull :: [String] -> MetadataTable -> Int -> Maybe ByteString
 mdStringOrNull cxt mt ix =
   case mdForwardRefOrNull cxt mt ix of
     Nothing -> Nothing
@@ -144,8 +144,8 @@ mkMdRefTable mt = Map.mapMaybe step (mtNodes mt)
 
 data PartialMetadata = PartialMetadata
   { pmEntries          :: MetadataTable
-  , pmNamedEntries     :: Map.Map String [Int]
-  , pmNextName         :: Maybe String
+  , pmNamedEntries     :: Map.Map ByteString [Int]
+  , pmNextName         :: Maybe ByteString
   , pmInstrAttachments :: InstrMdAttachments
   , pmFnAttachments    :: PFnMdAttachments
   , pmGlobalAttachments:: PGlobalAttachments
@@ -175,7 +175,7 @@ addGlobalAttachments sym mds pm =
   pm { pmGlobalAttachments = Map.insert sym mds (pmGlobalAttachments pm)
      }
 
-setNextName :: String -> PartialMetadata -> PartialMetadata
+setNextName :: ByteString -> PartialMetadata -> PartialMetadata
 setNextName name pm = pm { pmNextName = Just name }
 
 addFnAttachment :: PFnMdAttachments -> PartialMetadata -> PartialMetadata
@@ -290,7 +290,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
  case recordCode r of
   -- [values]
   1 -> label "METADATA_STRING" $ do
-    str <- parseFields r 0 char `mplus` parseField r 0 string
+    str <- fmap S.pack (parseFields r 0 char) `mplus` parseField r 0 string
     return $! updateMetadataTable (addString str) pm
 
   -- [type num, value num]
@@ -315,7 +315,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
 
   -- [values]
   4 -> label "METADATA_NAME" $ do
-    name <- parseFields r 0 char `mplus` parseField r 0 cstring
+    name <- fmap S.pack (parseFields r 0 char) `mplus` parseField r 0 cstring
     return $! setNextName name pm
 
   -- [n x md num]
@@ -323,8 +323,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
 
   -- [n x [id, name]]
   6 -> label "METADATA_KIND" $ do
-    kind <- parseField  r 0 numeric
-    name <- parseFields r 1 char
+    kind <- parseField r 0 numeric
+    name <- fmap S.pack (parseFields r 1 char)
     addKind kind name
     return pm
 
@@ -749,7 +749,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       (fail "Invalid record: metadata strings truncated")
     let strings = snd (mapAccumL f bsStrings lengths)
           where f s i = case S.splitAt i s of
-                          (str,rest) -> (rest, Char8.unpack str)
+                          (str,rest) -> (rest, str)
     return $! updateMetadataTable (addStrings strings) pm
 
   -- [ valueid, n x [id, mdnode] ]
@@ -870,6 +870,6 @@ parseMetadataOldNode fnLocal vt mt r pm = do
 
 parseMetadataKindEntry :: Record -> Parse ()
 parseMetadataKindEntry r = do
-  kind <- parseField  r 0 numeric
-  name <- parseFields r 1 char
+  kind <- parseField r 0 numeric
+  name <- fmap S.pack (parseFields r 1 char)
   addKind kind name
