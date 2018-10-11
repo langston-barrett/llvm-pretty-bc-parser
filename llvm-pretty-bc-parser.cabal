@@ -3,11 +3,12 @@ Version:             0.4.0.0
 License:             BSD3
 License-file:        LICENSE
 Author:              Trevor Elliott <trevor@galois.com>
-Maintainer:          Trevor Elliott
+Maintainer:          Aaron Tomb <atomb@galois.com>
 Category:            Text
 Build-type:          Simple
 Cabal-version:       >=1.10
 Synopsis:            LLVM bitcode parsing library
+Tested-with:         GHC==8.6.1, GHC==8.4.3, GHC==8.2.2
 
 Description:
   A parser for the LLVM bitcode file format, yielding a Module from the
