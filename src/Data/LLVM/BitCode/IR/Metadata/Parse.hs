@@ -44,8 +44,12 @@ import Data.LLVM.BitCode.IR.Metadata.Applicative
 -- XXX this currently relies on the constant block having been parsed already.
 -- Though most bitcode examples I've seen are ordered this way, it would be nice
 -- to not have to rely on it.
-parseMetadataEntry :: ValueTable -> MetadataTable -> PartialMetadata -> Entry
-                   -> Parse PartialMetadata
+parseMetadataEntry :: Applicative m
+                   => ValueTable
+                   -> MetadataTable
+                   -> PartialMetadata m
+                   -> Entry
+                   -> Parse (PartialMetadata m)
 parseMetadataEntry vt mt pm (fromEntry -> Just r) =
  case recordCode r of
   -- [values]
@@ -596,8 +600,12 @@ parseGlobalObjectAttachment mt r = label "parseGlobalObjectAttachment" $
 
 
 -- | Parse a metadata node.
-parseMetadataNode :: Bool -> MetadataTable -> Record -> PartialMetadata
-                  -> Parse PartialMetadata
+parseMetadataNode :: Functor m
+                  => Bool
+                  -> MetadataTable
+                  -> Record
+                  -> PartialMetadata m
+                  -> Parse (PartialMetadata m)
 parseMetadataNode isDistinct mt r pm = do
   ixs <- parseFields r 0 numeric
   cxt <- getContext
@@ -606,8 +614,13 @@ parseMetadataNode isDistinct mt r pm = do
 
 
 -- | Parse out a metadata node in the old format.
-parseMetadataOldNode :: Bool -> ValueTable -> MetadataTable -> Record
-                     -> PartialMetadata -> Parse PartialMetadata
+parseMetadataOldNode :: Functor m
+                     => Bool
+                     -> ValueTable
+                     -> MetadataTable
+                     -> Record
+                     -> PartialMetadata m
+                     -> Parse (PartialMetadata m)
 parseMetadataOldNode fnLocal vt mt r pm = do
   values <- loop =<< parseFields r 0 numeric
   return $! updateMetadataTable (addOldNode fnLocal values) pm

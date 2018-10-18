@@ -1,3 +1,6 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 {-|
 Module      : Data.LLVM.BitCode.IR.Metadata.Table
 Description : The parsing state for metadata blocks
@@ -21,7 +24,9 @@ import Control.Monad (guard)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map as Map
 
--- Parsing State ---------------------------------------------------------------
+import Data.LLVM.BitCode.IR.Metadata.Lookup
+
+-- ** MetadataTable
 
 data MetadataTable = MetadataTable
   { mtEntries   :: MdTable
@@ -130,20 +135,31 @@ mkMdRefTable mt = Map.mapMaybe step (mtNodes mt)
     guard (not fnLocal)
     return ix
 
-data PartialMetadata = PartialMetadata
-  { pmEntries          :: MetadataTable
+-- ** LookupMd
+
+-- | LookupMd m a
+--   = Lookup m (Typed PValue) a
+--   = ReaderM m (Int -> m (Typed PValue)) a
+--   = (Int -> m (Typed PValue)) -> m a
+type LookupMd m = Lookup m Int (Typed PValue)
+
+-- ** PartialMetadata
+
+data PartialMetadata m = PartialMetadata
+  { pmEntries          :: LookupMd m => m MetadataTable
   , pmNamedEntries     :: Map.Map String [Int]
   , pmNextName         :: Maybe String
   , pmInstrAttachments :: InstrMdAttachments
   , pmFnAttachments    :: PFnMdAttachments
   , pmGlobalAttachments:: PGlobalAttachments
-  } deriving (Show)
+  }
 
-emptyPartialMetadata ::
-  Int {- ^ globals seen so far -} ->
-  MdTable -> PartialMetadata
+emptyPartialMetadata :: Applicative m
+                     => Int {- ^ globals seen so far -}
+                     -> MdTable
+                     -> PartialMetadata m
 emptyPartialMetadata globals es = PartialMetadata
-  { pmEntries          = emptyMetadataTable globals es
+  { pmEntries          = pure $ emptyMetadataTable globals es
   , pmNamedEntries     = Map.empty
   , pmNextName         = Nothing
   , pmInstrAttachments = Map.empty
@@ -151,32 +167,33 @@ emptyPartialMetadata globals es = PartialMetadata
   , pmGlobalAttachments= Map.empty
   }
 
-updateMetadataTable :: (MetadataTable -> MetadataTable)
-                    -> (PartialMetadata -> PartialMetadata)
-updateMetadataTable f pm = pm { pmEntries = f (pmEntries pm) }
+updateMetadataTable :: Functor m
+                    => (MetadataTable -> MetadataTable)
+                    -> (PartialMetadata m -> PartialMetadata m)
+updateMetadataTable f pm = pm { pmEntries = f <$> pmEntries pm }
 
 addGlobalAttachments ::
   Symbol {- ^ name of the global to attach to ^ -} ->
   Map.Map KindMd PValMd {- ^ metadata references to attach ^ -} ->
-  (PartialMetadata -> PartialMetadata)
+  (PartialMetadata m -> PartialMetadata m)
 addGlobalAttachments sym mds pm =
   pm { pmGlobalAttachments = Map.insert sym mds (pmGlobalAttachments pm)
      }
 
-setNextName :: String -> PartialMetadata -> PartialMetadata
+setNextName :: String -> PartialMetadata m -> PartialMetadata m
 setNextName name pm = pm { pmNextName = Just name }
 
-addFnAttachment :: PFnMdAttachments -> PartialMetadata -> PartialMetadata
+addFnAttachment :: PFnMdAttachments -> PartialMetadata m -> PartialMetadata m
 addFnAttachment att pm =
   -- left-biased union, since the parser overwrites metadata as it encounters it
   pm { pmFnAttachments = Map.union att (pmFnAttachments pm) }
 
 addInstrAttachment :: Int -> [(KindMd,PValMd)]
-                   -> PartialMetadata -> PartialMetadata
+                   -> PartialMetadata m -> PartialMetadata m
 addInstrAttachment instr md pm =
   pm { pmInstrAttachments = Map.insert instr md (pmInstrAttachments pm) }
 
-nameMetadata :: [Int] -> PartialMetadata -> Parse PartialMetadata
+nameMetadata :: [Int] -> PartialMetadata m -> Parse (PartialMetadata m)
 nameMetadata val pm = case pmNextName pm of
   Just name -> return $! pm
     { pmNextName     = Nothing
@@ -184,7 +201,7 @@ nameMetadata val pm = case pmNextName pm of
     }
   Nothing -> fail "Expected a metadata name"
 
-namedEntries :: PartialMetadata -> [NamedMd]
+namedEntries :: PartialMetadata m -> [NamedMd]
 namedEntries  = map (uncurry NamedMd)
               . Map.toList
               . pmNamedEntries
@@ -208,7 +225,8 @@ finalizePValMd :: PValMd -> Parse ValMd
 finalizePValMd = relabel (const requireBbEntryName)
 
 -- | Partition unnamed entries into global and function local unnamed entries.
-unnamedEntries :: PartialMetadata -> ([PartialUnnamedMd],[PartialUnnamedMd])
+{-
+unnamedEntries :: PartialMetadata m -> ([PartialUnnamedMd],[PartialUnnamedMd])
 unnamedEntries pm = foldl resolveNode ([],[]) (Map.toList (mtNodes mt))
   where
   mt = pmEntries pm
@@ -228,6 +246,7 @@ unnamedEntries pm = foldl resolveNode ([],[]) (Map.toList (mtNodes mt))
       , pumValues = v
       , pumDistinct = d
       }
+-}
 
 type InstrMdAttachments = Map.Map Int [(KindMd,PValMd)]
 
@@ -243,7 +262,8 @@ type ParsedMetadata =
   , PGlobalAttachments
   )
 
-parsedMetadata :: PartialMetadata -> ParsedMetadata
+{-
+parsedMetadata :: PartialMetadata m -> ParsedMetadata
 parsedMetadata pm =
   ( namedEntries pm
   , unnamedEntries pm
@@ -251,3 +271,4 @@ parsedMetadata pm =
   , pmFnAttachments pm
   , pmGlobalAttachments pm
   )
+-}
