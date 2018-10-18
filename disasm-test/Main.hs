@@ -1,10 +1,10 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 
 module Main where
 
 import Data.LLVM.BitCode (parseBitCodeLazyFromFile,Error(..),formatError)
-import Text.LLVM.AST (Module)
 import Text.LLVM.PP (ppLLVM,ppModule)
 
 import Control.Monad (when)
@@ -94,7 +94,7 @@ main  = do
 
 -- | A test failure.
 data TestFailure
-  = ParseError Error -- ^ A parser failure.
+  = ParseError Error           -- ^ A parser failure.
     deriving (Typeable,Show)
 
 instance X.Exception TestFailure
@@ -145,18 +145,16 @@ normalizeBitCode Options { .. } pfx file = do
 -- fails.
 processBitCode :: FilePath -> FilePath -> IO FilePath
 processBitCode pfx file = do
-  let handler :: X.SomeException -> IO (Either Error Module)
-      handler se = return (Left (Error [] (show se)))
-  e <- parseBitCodeLazyFromFile file `X.catch` handler
-  case e of
-    Left err -> X.throwIO (ParseError err)
-    Right m  -> do
-      tmp        <- getTemporaryDirectory
-      (parsed,h) <- openTempFile tmp (pfx <.> "ll")
-      hPrint h (ppLLVM (ppModule m))
-      hClose h
-      stripComments parsed
-      return parsed
+  parseBitCodeLazyFromFile file >>=
+    \case
+      Left err -> X.throwIO (ParseError err)
+      Right m  -> do
+        tmp        <- getTemporaryDirectory
+        (parsed,h) <- openTempFile tmp (pfx <.> "ll")
+        hPrint h (ppLLVM (ppModule m))
+        hClose h
+        stripComments parsed
+        return parsed
 
 -- | Remove comments from a .ll file, stripping everything including the
 -- semi-colon.

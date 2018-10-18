@@ -1,10 +1,12 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 
 module Data.LLVM.BitCode.Parse where
 
@@ -24,25 +26,19 @@ import qualified Data.ByteString as BS
 import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
 
+import Debug.Trace
 
 -- Error Collection Parser -----------------------------------------------------
 
 data Error = Error
   { errContext :: [String]
+  , errState   :: ParseState -- ^ Record the state so we can debug failing parses.
   , errMessage :: String
   } deriving (Show)
 
-formatError :: Error -> String
-formatError err
-  | null (errContext err) = errMessage err
-  | otherwise             = unlines
-                          $ errMessage err
-                          : "from:"
-                          : map ('\t' :) (errContext err)
-
 newtype Parse a = Parse
   { unParse :: ReaderT Env (StateT ParseState (ExceptionT Error Lift)) a
-  } deriving (Functor,Applicative,MonadFix)
+  } deriving (Functor, Applicative, MonadFix)
 
 instance Monad Parse where
   {-# INLINE return #-}
@@ -68,16 +64,25 @@ instance MonadPlus Parse where
   {-# INLINE mplus #-}
   mplus = (<|>)
 
-instance BaseM Parse (ExceptionT Error Lift) where
-  inBase = Parse . lift . lift
-
 instance ExceptionM Parse Error where
-  raise = inBase . raise
+  raise = Parse . raise
+
+instance StateM Parse ParseState where
+  get = Parse get
+  set = Parse . set
+
+-- | This can be used in more restrictive type signatures for functions that
+--   don't update the state. This is helpful in e.g. error reporting.
+--
+--   It's a little ad-hoc. A better solution would ultimately be something
+--   like freer-simple or https://github.com/tweag/capability.
+instance ReaderM Parse ParseState where
+  ask = get
 
 runParse :: Parse a -> Either Error a
-runParse (Parse m) = case runM m emptyEnv emptyParseState of
-  Left err    -> Left err
-  Right (a,_) -> Right a
+runParse (Parse m) = trace "runParse" $ case trace "runM" $ runM m emptyEnv emptyParseState of
+  Left err    -> trace "runParse:Left"  $ Left err
+  Right (a,_) -> trace "runParse:Right" $ Right a
 
 notImplemented :: Parse a
 notImplemented  = fail "not implemented"
@@ -187,23 +192,29 @@ mkTypeTable :: [Type] -> TypeTable
 mkTypeTable  = Map.fromList . zip [0 ..]
 
 data BadForwardRef
-  = BadTypeRef [String] Int
-  | BadValueRef [String] Int
+  = BadTypeRef  [String] ParseState Int
+  | BadValueRef [String] ParseState Int
     deriving (Show,Typeable)
 
 instance X.Exception BadForwardRef
 
 badRefError :: BadForwardRef -> Error
 badRefError ref = case ref of
-  BadTypeRef  c i -> Error c ("bad forward reference to type: " ++ show i)
-  BadValueRef c i -> Error c ("bad forward reference to value: " ++ show i)
+  BadTypeRef  c ps i -> Error c ps ("bad forward reference to type: " ++ show i)
+  BadValueRef c ps i -> Error c ps ("bad forward reference to value: " ++ show i)
 
 -- | As type tables are always pre-allocated, looking things up should never
 -- fail.  As a result, the worst thing that could happen is that the type entry
 -- causes a runtime error.  This is pretty bad, but it's an acceptable trade-off
 -- for the complexity of the forward references in the type table.
-lookupTypeRef :: [String] -> Int -> TypeTable -> Type
-lookupTypeRef cxt n = fromMaybe (X.throw (BadTypeRef cxt n)) . Map.lookup n
+lookupTypeRef :: ReaderM m ParseState
+              => [String] -> Int -> TypeTable -> m Type
+lookupTypeRef cxt n tt = trace "lookupTypeRef" $ do
+  ps <- ask
+  case Map.lookup n tt of
+    Just x  -> trace "lookupTypeRef:Just" $ pure x
+    Nothing -> trace "lookupTypeRef:Noth" $ X.throw (BadTypeRef cxt ps n)
+  -- pure $ fromMaybe () . Map.lookup n $ tt
 
 setTypeTable :: TypeTable -> Parse ()
 setTypeTable table = Parse $ do
@@ -214,7 +225,7 @@ getTypeTable :: Parse TypeTable
 getTypeTable  = Parse (psTypeTable <$> get)
 
 setTypeTableSize :: Int -> Parse ()
-setTypeTableSize n = Parse $ do
+setTypeTableSize n = trace "setTypeTableSize" $ Parse $ do
   ps <- get
   set ps { psTypeTableSize = n }
 
@@ -243,11 +254,11 @@ getType' ref = do
   unless (ref < psTypeTableSize ps)
     (fail ("type reference " ++ show ref ++ " is too large"))
   cxt <- getContext
-  return (lookupTypeRef cxt ref (psTypeTable ps))
+  lookupTypeRef cxt ref (psTypeTable ps)
 
 -- | Test to see if the type table has been added to already.
 isTypeTableEmpty :: Parse Bool
-isTypeTableEmpty  = Parse (Map.null . psTypeTable <$> get)
+isTypeTableEmpty  = trace "isTypeTableEmpty" $ Parse (Map.null . psTypeTable <$> get)
 
 setStringTable :: StringTable -> Parse ()
 setStringTable st = Parse $ do
@@ -264,12 +275,16 @@ type PValue = Value' Int
 
 type PInstr = Instr' Int
 
-data ValueTable = ValueTable
-  { valueNextId  :: !Int
-  , valueEntries :: Map.Map Int (Typed PValue)
+-- | This is used for e.g. metadata blocks.
+data ValueTable' a = ValueTable
+  { valueNextId   :: !Int -- ^ Most IDs of values in bitcode are implicit,
+                          -- sequential integers
+  , valueEntries  :: Map.Map Int a
   , strtabEntries :: Map.Map Int (Int, Int)
-  , valueRelIds  :: Bool
-  } deriving (Show)
+  , valueRelIds   :: Bool
+  } deriving (Show, Functor, Eq)
+
+type ValueTable = ValueTable' (Typed PValue)
 
 emptyValueTable :: Bool -> ValueTable
 emptyValueTable rel = ValueTable
@@ -279,11 +294,11 @@ emptyValueTable rel = ValueTable
   , valueRelIds  = rel
   }
 
-addValue :: Typed PValue -> ValueTable -> ValueTable
+addValue :: a -> ValueTable' a -> ValueTable' a
 addValue tv vs = snd (addValue' tv vs)
 
-addValue' :: Typed PValue -> ValueTable -> (Int,ValueTable)
-addValue' tv vs = (valueNextId vs,vs')
+addValue' :: a -> ValueTable' a -> (Int, ValueTable' a)
+addValue' tv vs = (valueNextId vs, vs')
   where
   vs' = vs
     { valueNextId  = valueNextId vs + 1
@@ -320,7 +335,9 @@ translateValueId vt n | valueRelIds vt = fromIntegral adjusted
 
 -- | Lookup an absolute address in the value table.
 lookupValueTableAbs :: Int -> ValueTable -> Maybe (Typed PValue)
-lookupValueTableAbs n values = Map.lookup n (valueEntries values)
+lookupValueTableAbs n values =
+  trace ("lookupValueTableAbs: " ++ show n) $
+  Map.lookup n (valueEntries values)
 
 -- | When you know you have an absolute index.
 lookupValueAbs :: Int -> Parse (Maybe (Typed PValue))
@@ -338,9 +355,13 @@ lookupValue n = lookupValueTable n `fmap` getValueTable
 -- | Lookup lazily, hiding an error in the result if the entry doesn't exist by
 -- the time it's needed.  NOTE: This always looks up an absolute index, never a
 -- relative one.
-forwardRef :: [String] -> Int -> ValueTable -> Typed PValue
-forwardRef cxt n vt =
-  fromMaybe (X.throw (BadValueRef cxt n)) (lookupValueTableAbs n vt)
+forwardRef :: ReaderM m ParseState
+           => [String] -> Int -> ValueTable -> m (Typed PValue)
+forwardRef cxt n vt = trace ("forwardRef: " ++ show n) $ do
+  ps <- ask
+  case lookupValueTableAbs n vt of
+    Nothing -> trace "forwardRef:Noth" $ X.throw (BadValueRef cxt ps n)
+    Just v  -> trace "forwardRef:Just" $ pure v
 
 -- | Require that a value be present.
 requireValue :: Int -> Parse (Typed PValue)
@@ -366,22 +387,24 @@ setValueTable vt = Parse $ do
   set ps { psValueTable = vt }
 
 -- | Update the value table, giving a lazy reference to the final table.
-fixValueTable :: (ValueTable -> Parse (a,[Typed PValue])) -> Parse a
-fixValueTable k = do
-  vt <- getValueTable
-  rec let vt' = foldr addValue vt vs
-      (a,vs) <- k vt'
-  setValueTable vt'
-  return a
+-- fixValueTable :: (ValueTable -> Parse (a,[Typed PValue])) -> Parse a
+-- fixValueTable k = do
+--   pure $ trace "In fixValueTable" ()
+--   vt <- getValueTable
+--   rec let vt' = foldr addValue vt vs
+--       (a,vs) <- k vt'
+--   setValueTable vt'
+--   return a
 
-fixValueTable_ :: (ValueTable -> Parse [Typed PValue]) -> Parse ()
-fixValueTable_ k = fixValueTable $ \ vt -> do
-  vs <- k vt
-  return ((),vs)
-
+-- fixValueTable_ :: (ValueTable -> Parse [Typed PValue]) -> Parse ()
+-- fixValueTable_ k = fixValueTable $ \ vt -> do
+--   pure $ trace "In fixValueTable_" ()
+--   vs <- k vt
+--   return ((),vs)
 
 type PValMd = ValMd' Int
 
+type MdTable' a = ValueTable' a
 type MdTable = ValueTable
 
 getMdTable :: Parse MdTable
@@ -468,7 +491,7 @@ addLabel :: String -> Env -> Env
 addLabel l env = env { envContext = l : envContext env }
 
 getContext :: Parse [String]
-getContext  = Parse (envContext `fmap` ask)
+getContext  = trace "getContext" $ Parse (envContext `fmap` ask)
 
 
 data Symtab = Symtab
@@ -513,7 +536,7 @@ getTypeSymtab  = Parse (symTypeSymtab . envSymtab <$> ask)
 
 -- | Label a sub-computation with its context.
 label :: String -> Parse a -> Parse a
-label l m = Parse $ do
+label l m = trace l $ Parse $ do
   env <- ask
   local (addLabel l env) (unParse m)
 
@@ -521,8 +544,10 @@ label l m = Parse $ do
 failWithContext :: String -> Parse a
 failWithContext msg = Parse $ do
   env <- ask
+  st  <- get
   raise Error
     { errMessage = msg
+    , errState   = st
     , errContext = envContext env
     }
 

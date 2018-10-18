@@ -816,7 +816,8 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     (lhs,ix0) <- getValueTypePair t r 0
                 `mplus` (do i   <- adjustId =<< field 0 numeric
                             cxt <- getContext
-                            return (forwardRef cxt i t, 1))
+                            ref <- forwardRef cxt i t
+                            return (ref, 1))
 
     _predval  <- field ix0 unsigned
     let isfp = isJust $ msum [ do pty <- elimPrimType (typedType lhs)
@@ -979,7 +980,7 @@ parsePhiArgs relIds t r = loop 1
   parse n = do
     i   <- getId n
     cxt <- getContext
-    let val = forwardRef cxt i t
+    val <- forwardRef cxt i t
     bid <- field (n+1) numeric
     return (typedValue val,bid)
 

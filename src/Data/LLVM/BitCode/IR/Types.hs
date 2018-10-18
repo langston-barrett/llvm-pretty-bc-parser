@@ -1,3 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Data.LLVM.BitCode.IR.Types (
@@ -12,12 +15,15 @@ import Data.LLVM.BitCode.Record
 import Text.LLVM.AST
 
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
-import Control.Monad (when,unless,mplus,(<=<))
+import MonadLib (ReaderM, ask)
+import MonadLib.Monads (runReader)
+import Control.Monad (forM,when,unless,mplus,(<=<))
 import Data.List (sortBy)
 import Data.Maybe (catMaybes)
 import Data.Ord (comparing)
 import qualified Data.Map as Map
 
+import Debug.Trace
 
 -- Type Block ------------------------------------------------------------------
 
@@ -55,31 +61,38 @@ parseTypeBlock es = label "TYPE_BLOCK" $ do
   unless isEmpty (fail "Multiple TYPE_BLOCKs found!")
 
   -- resolve the type table, and the type symbol table
-  tys <- mapM parseTypeBlockEntry ents
-  cxt <- getContext
-  let (tt,sym) = deriveTypeTables cxt (catMaybes tys)
+  tys      <- mapM parseTypeBlockEntry ents
+  cxt      <- getContext
+  (tt,sym) <- deriveTypeTables cxt (catMaybes tys)
   setTypeTable tt
   return sym
 
-deriveTypeTables :: [String] -> [(PType,Maybe Ident)] -> (TypeTable,TypeSymtab)
-deriveTypeTables cxt tys = (tt,sym)
+deriveTypeTables :: forall m. ReaderM m ParseState
+                 => [String] -> [(PType, Maybe Ident)] -> m (TypeTable, TypeSymtab)
+deriveTypeTables cxt tys = trace "deriveTypeTables" $ do
+  ps <- ask
+  pure (tt ps, sym)
   where
   ixs = zip [0 ..] tys
 
   -- symbol table entries aren't very common
   sym = foldl mkSym mempty ixs
-  mkSym sym' (ix,(_,mb)) = case mb of
+  mkSym sym' (ix, (_, mb)) = case mb of
     Nothing    -> sym'
     Just alias -> addTypeSymbol ix alias sym'
+
+  lookupTypeRef' :: ParseState -> [String] -> Int -> TypeTable -> Type
+  lookupTypeRef' ps ctx ix tt' = runReader ps (lookupTypeRef ctx ix tt')
 
   -- recursively resolve the type table, if they don't already exist in the
   -- symbol table.  if the index entry doesn't exist, throw an error, as that
   -- should be impossible.
-  tt = Map.fromList [ (ix,updateAliases resolve ty) | (ix,(ty,_)) <- ixs ]
-  resolve ix = case Map.lookup ix (tsById sym) of
-    Nothing    -> lookupTypeRef cxt ix tt
+  --
+  -- These take the parse state as an argument to provide a better error message.
+  tt ps = Map.fromList [ (ix,updateAliases (resolve ps) ty) | (ix,(ty,_)) <- ixs ]
+  resolve ps ix = case Map.lookup ix (tsById sym) of
+    Nothing    -> lookupTypeRef' ps cxt ix (tt ps)
     Just ident -> Alias ident
-
 
 type PType = Type' Int
 
@@ -181,14 +194,20 @@ parseTypeBlockEntry (fromEntry -> Just r) = case recordCode r of
 
   -- [vararg, [retty, paramty x N]]
   21 -> label "TYPE_CODE_FUNCTION" $ do
+    pure $ trace "TYPE_CODE_FUNCTION~~"
     let field = parseField r
     vararg <- label "vararg"     (field 0 boolean)
     tys    <- label "parameters" (field 1 (fieldArray typeRef))
+    pure $ trace "TYPE_CODE_FUNCTION~~case"
     case tys of
-      rty:ptys -> addType (FunTy rty ptys vararg)
-      []       -> fail "function expects a return type"
+      rty:ptys -> do
+        pure $ trace "TYPE_CODE_FUNCTION~~rty"
+        addType (FunTy rty ptys vararg)
+      []       -> trace "failing" $ fail "function expects a return type"
 
-  code -> fail ("unknown type code " ++ show code)
+  code -> do
+    pure $ trace "failing unknown type code"
+    fail ("unknown type code " ++ show code)
 
 -- skip blocks
 parseTypeBlockEntry (block -> Just _) =
@@ -198,7 +217,8 @@ parseTypeBlockEntry (block -> Just _) =
 parseTypeBlockEntry (abbrevDef -> Just _) =
   return Nothing
 
-parseTypeBlockEntry e =
+parseTypeBlockEntry e = do
+  pure $ trace "failing unexpected"
   fail ("type block: unexpected: " ++ show e)
 
 

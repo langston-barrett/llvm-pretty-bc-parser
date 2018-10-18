@@ -1,7 +1,8 @@
-{-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Data.LLVM.BitCode.IR.Constants where
 
@@ -27,6 +28,7 @@ import Data.Array.Unsafe (castSTUArray)
 import Data.Array.ST (castSTUArray)
 #endif
 
+import Debug.Trace
 
 -- Instruction Field Parsing ---------------------------------------------------
 
@@ -173,16 +175,19 @@ setCurType  = getType'
 
 -- | Parse the entries of the constants block.
 parseConstantsBlock :: [Entry] -> Parse ()
-parseConstantsBlock es = fixValueTable_ $ \ vs' -> do
+parseConstantsBlock es = trace "In parseConstantsBlock" $ do
+  vt <- getValueTable
   let curTy = fail "no current type id set"
-  (_,vs) <- foldM (parseConstantEntry vs') (curTy,[]) es
-  return vs
+  (_, vs) <- foldM (parseConstantEntry vt) (curTy, []) es
+  setValueTable (foldr addValue vt vs)
 
 -- | Parse entries of the constant table.
-parseConstantEntry :: ValueTable -> (Parse Type,[Typed PValue]) -> Entry
+parseConstantEntry :: ValueTable
+                   -> (Parse Type, [Typed PValue])
+                   -> Entry
                    -> Parse (Parse Type, [Typed PValue])
 
-parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
+parseConstantEntry t (getTy, cs) (fromEntry -> Just r) =
  label "CONSTANTS_BLOCK" $ case recordCode r of
 
   1 -> label "CST_CODE_SETTYPE" $ do
@@ -234,7 +239,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
     elems <- parseField r 0 (fieldArray numeric)
         `mplus` parseFields r 0 numeric
     cxt <- getContext
-    let vals = [forwardRef cxt ix t | ix <- elems ]
+    vals <- sequence $ [forwardRef cxt ix t | ix <- elems ]
     case ty of
 
       Struct _fs ->
@@ -253,6 +258,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
 
   -- [values]
   8 -> label "CST_CODE_STRING" $ do
+    pure $ trace "8" ()
     let field = parseField r
     ty     <- getTy
     values <- field 0 (fieldArray char)
@@ -260,6 +266,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
 
   -- [values]
   9 -> label "CST_CODE_CSTRING" $ do
+    pure $ trace "9" ()
     ty     <- getTy
     values <- parseField r 0 (fieldArray (fieldChar6 ||| char))
         `mplus` parseFields r 0 (fieldChar6 ||| char)
@@ -273,8 +280,8 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
     lopval  <- field 1 numeric
     ropval  <- field 2 numeric
     cxt     <- getContext
-    let lv = forwardRef cxt lopval t
-        rv = forwardRef cxt ropval t
+    lv      <- forwardRef cxt lopval t
+    rv      <- forwardRef cxt ropval t
     let mbWord = numeric =<< fieldAt 3 r
     return (getTy, Typed ty (mkInstr mbWord lv (typedValue rv)) : cs)
 
@@ -287,7 +294,8 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
     cast'  <- field 0 castOpCE
     opval  <- field 2 numeric
     cxt    <- getContext
-    return (getTy,Typed ty (cast' (forwardRef cxt opval t) ty):cs)
+    ref    <- forwardRef cxt opval t
+    return (getTy,Typed ty (cast' ref ty):cs)
 
   -- [n x operands]
   12 -> label "CST_CODE_CE_GEP" $ do
@@ -304,7 +312,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
     ix3 <- field 2 numeric
     cxt <- getContext
     let ref ix = forwardRef cxt ix t
-        ce     = ConstSelect (ref ix1) (ref ix2) (ref ix3)
+    ce  <- ConstSelect <$> (ref ix1) <*> (ref ix2) <*> (ref ix3)
     return (getTy, Typed ty (ValConstExpr ce):cs)
 
   -- [opty,opval,opval]
@@ -371,6 +379,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
 
   -- [n x elements]
   22 -> label "CST_CODE_DATA" $ do
+    pure $ trace "22" ()
     ty     <- getTy
     elemTy <- (elimPrimType =<< elimSequentialType ty)
         `mplus` fail "invalid container type for CST_CODE_DATA"
@@ -390,6 +399,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
       _                -> fail "unknown element type in CE_DATA"
 
   23 -> label "CST_CODE_INLINEASM" $ do
+    pure $ trace "23" ()
     let field = parseField r
     mask <- field 0 numeric
 
@@ -417,6 +427,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
 
   -- [opty, flags, n x operands]
   24 -> label "CST_CODE_CE_GEP_WITH_INRANGE_INDEX" $ do
+    pure $ trace "24" ()
     ty <- getTy
     (flags :: Word64) <- parseField r 1 numeric
     let inBounds = testBit flags 0
@@ -426,7 +437,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
 
 
 
-  code -> fail ("unknown constant record code: " ++ show code)
+  code -> trace "failing " $ fail ("unknown constant record code: " ++ show code)
 
 parseConstantEntry _ st (abbrevDef -> Just _) =
   -- ignore abbreviation definitions
@@ -445,7 +456,8 @@ parseCeGep isInbounds mInrangeIdx t r = do
         elt  <-             field (n+1) numeric
         rest <- loop (n+2) `mplus` return []
         cxt  <- getContext
-        return (Typed ty (typedValue (forwardRef cxt elt t)) : rest)
+        ref  <- forwardRef cxt elt t
+        return (Typed ty (typedValue ref) : rest)
   mPointeeType <-
     if isExplicit
     then Just <$> (getType =<< field 0 numeric)

@@ -17,6 +17,7 @@ import Control.Monad (unless,forM_)
 import Data.Monoid (mappend)
 import Data.Word (Word16)
 
+import Debug.Trace
 
 -- Module Parsing --------------------------------------------------------------
 
@@ -26,10 +27,12 @@ llvmIrMagic  = fromBitString (toBitString 8 0xc0 `mappend` toBitString 8 0xde)
 
 -- | Parse an LLVM Module out of a Bitstream object.
 parseModule :: Bitstream -> Parse Module
-parseModule Bitstream { bsAppMagic, bsEntries } = label "Bitstream" $ do
+parseModule Bitstream { bsAppMagic, bsEntries } = trace "parseModule" $ label "Bitstream" $ do
   unless (bsAppMagic == llvmIrMagic) (fail "Bitstream is not an llvm-ir")
   parseTopLevel bsEntries
 
+-- | Search through the entries for and fill out various tables that other
+-- entries will reference.
 findTables :: [Entry] -> Parse ()
 findTables es = forM_ es $ \e ->
   case e of

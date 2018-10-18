@@ -1,0 +1,237 @@
+Preprocessing library for llvm-pretty-bc-parser-0.4.0.0..
+Building library for llvm-pretty-bc-parser-0.4.0.0..
+Warning: -rtsopts and -with-rtsopts have no effect with -shared.
+    Call hs_init_ghc() from your main() function to set these options.
+ignoring (possibly broken) abi-depends field for packages
+Preprocessing executable 'llvm-disasm' for llvm-pretty-bc-parser-0.4.0.0..
+Building executable 'llvm-disasm' for llvm-pretty-bc-parser-0.4.0.0..
+Running llvm-disasm...
+parseBitstream
+handleBitstreamError
+handleBistreamError:Right
+parseBitstream
+runParse
+runM
+parseModule
+Bitstream
+MODULE_BLOCK
+type symbol table
+tsymtab: just
+TYPE_BLOCK
+type-table size
+setTypeTableSize
+isTypeTableEmpty
+TYPE_CODE_INTEGER
+TYPE_CODE_ARRAY
+TYPE_CODE_POINTER
+TYPE_CODE_INTEGER
+TYPE_CODE_FUNCTION
+vararg
+parameters
+TYPE_CODE_POINTER
+TYPE_CODE_POINTER
+TYPE_CODE_FUNCTION
+vararg
+parameters
+TYPE_CODE_POINTER
+TYPE_CODE_FUNCTION
+vararg
+parameters
+TYPE_CODE_POINTER
+TYPE_CODE_METADATA
+TYPE_CODE_INTEGER
+TYPE_CODE_VOID
+getContext
+deriveTypeTables
+value symbol table
+GLOBALVAR
+lookupTypeRef
+lookupTypeRef:Just
+FUNCTION
+lookupTypeRef
+lookupTypeRef:Just
+FUNCTION
+lookupTypeRef
+lookupTypeRef:Just
+FUNCTION
+lookupTypeRef
+lookupTypeRef:Just
+In parseConstantsBlock
+CONSTANTS_BLOCK
+CST_CODE_SETTYPE
+CONSTANTS_BLOCK
+CST_CODE_CSTRING
+lookupTypeRef
+lookupTypeRef:Just
+CONSTANTS_BLOCK
+CST_CODE_SETTYPE
+CONSTANTS_BLOCK
+CST_CODE_INTEGER
+lookupTypeRef
+lookupTypeRef:Just
+CONSTANTS_BLOCK
+CST_CODE_INTEGER
+lookupTypeRef
+lookupTypeRef:Just
+CONSTANTS_BLOCK
+CST_CODE_INTEGER
+lookupTypeRef
+lookupTypeRef:Just
+CONSTANTS_BLOCK
+CST_CODE_INTEGER
+lookupTypeRef
+lookupTypeRef:Just
+METADATA_KIND_BLOCK_ID
+METADATA_BLOCK_ID
+METADATA_BLOCK
+METADATA_STRINGS
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 5
+lookupValueTableAbs: 5
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 6
+lookupValueTableAbs: 6
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 7
+lookupValueTableAbs: 7
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 8
+lookupValueTableAbs: 8
+forwardRef:Just
+METADATA_NODE
+parseMetadataNode
+mdForwardRef
+forwardRef: 3
+lookupValueTableAbs: 3
+METADATA_STRINGS
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 5
+lookupValueTableAbs: 5
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 6
+lookupValueTableAbs: 6
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 7
+lookupValueTableAbs: 7
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 8
+lookupValueTableAbs: 8
+forwardRef:Just
+METADATA_NODE
+parseMetadataNode
+mdForwardRef
+forwardRef: 3
+lookupValueTableAbs: 3
+METADATA_STRINGS
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 5
+lookupValueTableAbs: 5
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 6
+lookupValueTableAbs: 6
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 7
+lookupValueTableAbs: 7
+forwardRef:Just
+METADATA_VALUE
+lookupTypeRef
+lookupTypeRef:Just
+forwardRef: 8
+lookupValueTableAbs: 8
+forwardRef:Just
+METADATA_NODE
+parseMetadataNode
+mdForwardRef
+forwardRef: 3
+lookupValueTableAbs: 3
+*** Exception (reporting due to +RTS -xc): (THUNK_STATIC), stack trace: 
+  MonadLib.runLift,
+  called from MonadLib.mfix.m,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix.\,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix.\,
+  called from MonadLib.mfix,
+  called from Data.LLVM.BitCode.Parse.mfix,
+  called from MonadLib.runReaderT,
+  called from MonadLib.runStateT,
+  called from MonadLib.runM,
+  called from MonadLib.runM,
+  called from Data.LLVM.BitCode.Parse.runParse,
+  called from Data.LLVM.BitCode.parseBitstream,
+  called from Data.LLVM.BitCode.parseBitCode,
+  called from Main.disasm,
+  called from Main.main
+*** Exception (reporting due to +RTS -xc): (THUNK_STATIC), stack trace: 
+  MonadLib.runLift,
+  called from MonadLib.mfix.m,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix.\,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix.\,
+  called from MonadLib.mfix,
+  called from Data.LLVM.BitCode.Parse.mfix,
+  called from MonadLib.runReaderT,
+  called from MonadLib.runStateT,
+  called from MonadLib.runM,
+  called from MonadLib.runM,
+  called from Data.LLVM.BitCode.Parse.runParse,
+  called from Data.LLVM.BitCode.parseBitstream,
+  called from Data.LLVM.BitCode.parseBitCode,
+  called from Main.disasm,
+  called from Main.main
+*** Exception (reporting due to +RTS -xc): (base:GHC.Exception.SomeException), stack trace: 
+  MonadLib.runLift,
+  called from MonadLib.mfix.m,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix.\,
+  called from MonadLib.mfix,
+  called from MonadLib.mfix.\,
+  called from MonadLib.mfix,
+  called from Data.LLVM.BitCode.Parse.mfix,
+  called from MonadLib.runReaderT,
+  called from MonadLib.runStateT,
+  called from MonadLib.runM,
+  called from MonadLib.runM,
+  called from Data.LLVM.BitCode.Parse.runParse,
+  called from Data.LLVM.BitCode.parseBitstream,
+  called from Data.LLVM.BitCode.parseBitCode,
+  called from Main.disasm,
+  called from Main.main
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; ./examples/test.bc
+llvm-disasm: <<loop>>

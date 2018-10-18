@@ -34,7 +34,7 @@ getConstantFwdRefAdjustedId t ty n' = label "getConstantFwdRefAdjustedId" $ do
     -- forward reference
     Nothing -> do
       cxt <- getContext
-      let ref = forwardRef cxt n' t
+      ref <- forwardRef cxt n' t
       return (Typed ty (typedValue ref))
 
 -- | Get either a value from the value table, with its value, or parse a value
@@ -53,7 +53,7 @@ getValueTypePair t r ix = do
     Nothing -> do
       ty  <- getType =<< field (ix+1) numeric
       cxt <- getContext
-      let ref = forwardRef cxt n t
+      ref <- forwardRef cxt n t
 
       -- generate the forward reference to the value only, as we already know
       -- what the type should be.
@@ -76,7 +76,7 @@ getFnValueById' mbVt ty n = label "getFnValueById'" $ case ty of
   PrimType Metadata -> do
     cxt <- getContext
     md  <- getMdTable
-    return (forwardRef cxt n md)
+    forwardRef cxt n md
 
   _ -> do
     mb <- lookupValueAbs n
@@ -93,7 +93,7 @@ getFnValueById' mbVt ty n = label "getFnValueById'" $ case ty of
           Nothing
             | Just vt <- mbVt ->
               do cxt <- getContext
-                 return (forwardRef cxt n vt)
+                 forwardRef cxt n vt
 
             | otherwise ->
               fail "Unable to create forward reference"

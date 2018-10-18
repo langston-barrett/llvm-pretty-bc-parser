@@ -26,6 +26,8 @@ import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
 import qualified Data.Traversable as T
 
+import Debug.Trace
+
 
 -- Module Block Parsing --------------------------------------------------------
 
@@ -95,8 +97,8 @@ parseModuleBlock ents = label "MODULE_BLOCK" $ do
   tsymtab <- label "type symbol table" $ do
     mb <- match (findMatch typeBlockIdNew) ents
     case mb of
-      Just es -> parseTypeBlock es
-      Nothing -> return mempty
+      Just es -> trace "tsymtab: just" $ parseTypeBlock es
+      Nothing -> trace "tsymtab: noth" $ return mempty
 
   withTypeSymtab tsymtab $ label "value symbol table" $ do
     -- parse the value symbol table out first, if there is one
