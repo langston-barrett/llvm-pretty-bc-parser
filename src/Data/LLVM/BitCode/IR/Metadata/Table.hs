@@ -1,5 +1,6 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-|
 Module      : Data.LLVM.BitCode.IR.Metadata.Table
@@ -19,9 +20,9 @@ import Data.LLVM.BitCode.Parse
 import Text.LLVM.AST
 import Text.LLVM.Labels
 
-import Control.Exception (throw)
-import Control.Monad (guard)
-import Data.Maybe (fromMaybe)
+import           Control.Monad (guard)
+import qualified Control.Exception as X
+--import Data.Maybe (fromMaybe)
 import qualified Data.Map as Map
 
 import Data.LLVM.BitCode.IR.Metadata.Lookup
@@ -48,10 +49,13 @@ emptyMetadataTable globals es = MetadataTable
 metadata :: PValMd -> Typed PValue
 metadata  = Typed (PrimType Metadata) . ValMd
 
+
 addMetadata :: PValMd  -> MetadataTable -> (Int,MetadataTable)
 addMetadata val mt = (ix, mt { mtEntries = es' })
-  where
-  (ix,es') = addValue' (metadata val) (mtEntries mt)
+  where (ix, es') = addValue' (metadata val) (mtEntries mt)
+
+-- addMetadata' :: Applicative f => f PValMd -> f MetadataTable -> f (Int, MetadataTable)
+-- addMetadata' val mt = addMetadata <$> val <*> mt
 
 addMdValue :: Typed PValue -> MetadataTable -> MetadataTable
 addMdValue tv mt = mt { mtEntries = addValue tv' (mtEntries mt) }
@@ -75,8 +79,16 @@ addStrings strs mt = foldl (flip addString) mt strs
 
 addLoc :: Bool -> PDebugLoc -> MetadataTable -> MetadataTable
 addLoc isDistinct loc mt = nameNode False isDistinct ix mt'
-  where
-  (ix,mt') = addMetadata (ValMdLoc loc) mt
+  where (ix, mt') = addMetadata (ValMdLoc loc) mt
+
+-- addLoc :: Applicative f
+--        => Bool -> f PDebugLoc -> f MetadataTable -> f MetadataTable
+-- addLoc isDistinct loc mt = nameNode False isDistinct <$> ix <*> mt'
+--   where (ix, mt') = addMetadata (ValMdLoc loc) mt
+
+-- addLoc :: Bool -> PDebugLoc -> MetadataTable -> MetadataTable
+-- addLoc isDistinct loc mt = nameNode False isDistinct ix mt'
+--   where (ix, mt') = addMetadata (ValMdLoc loc) mt
 
 addDebugInfo
   :: Bool
@@ -90,43 +102,57 @@ addDebugInfo isDistinct di mt = nameNode False isDistinct ix mt'
 -- | Add a new node, that might be distinct.
 addNode :: Bool -> [Maybe PValMd] -> MetadataTable -> MetadataTable
 addNode isDistinct vals mt = nameNode False isDistinct ix mt'
-  where
-  (ix,mt') = addMetadata (ValMdNode vals) mt
+  where (ix, mt') = addMetadata (ValMdNode vals) mt
 
 addOldNode :: Bool -> [Typed PValue] -> MetadataTable -> MetadataTable
 addOldNode fnLocal vals mt = nameNode fnLocal False ix mt'
-  where
-  (ix,mt') = addMetadata (ValMdNode [ Just (ValMdValue tv) | tv <- vals ]) mt
+  where (ix, mt') = addMetadata (ValMdNode [ Just (ValMdValue tv) | tv <- vals ]) mt
 
-mdForwardRef :: [String] -> MetadataTable -> Int -> PValMd
-mdForwardRef cxt mt ix = fromMaybe fallback nodeRef
-  where
-  fallback          = case forwardRef cxt ix (mtEntries mt) of
-                        Typed { typedValue = ValMd md } -> md
-                        tv                              -> ValMdValue tv
-  reference (_,_,r) = ValMdRef r
-  nodeRef           = reference `fmap` Map.lookup ix (mtNodes mt)
+-- | Either (1) find a value in the 'mtNodes' and return its TODO,
+--   or use a forward reference to the value.
+mdForwardRef :: LookupMd m => MetadataTable -> Int -> m PValMd
+mdForwardRef mt ix =
+  case thd <$> Map.lookup ix (mtNodes mt) of
+    Just x  -> pure x
+    Nothing ->
+      withLookup ix $
+        \case
+          Typed { typedValue = ValMd md } -> md
+          tv                              -> ValMdValue tv
+  where thd (_, _, r) = ValMdRef r -- "third"
 
-mdForwardRefOrNull :: [String] -> MetadataTable -> Int -> Maybe PValMd
-mdForwardRefOrNull cxt mt ix | ix > 0 = Just (mdForwardRef cxt mt (ix - 1))
-                             | otherwise = Nothing
+mdForwardRefOrNull :: LookupMd m
+                   => MetadataTable
+                   -> Int
+                   -> Maybe (m PValMd)
+mdForwardRefOrNull mt ix | ix > 0 = Just (mdForwardRef mt (ix - 1))
+                         | otherwise = Nothing
 
-mdNodeRef :: [String] -> MetadataTable -> Int -> Int
+mdNodeRef :: Functor f => [String] -> f MetadataTable -> Int -> f Int
 mdNodeRef cxt mt ix =
-  maybe (throw (BadValueRef cxt ix)) prj (Map.lookup ix (mtNodes mt))
-  where
-  prj (_,_,x) = x
+  flip fmap (Map.lookup ix <$> (mtNodes <$> mt)) $
+    \case
+      Just (_, _, x) -> x
+      Nothing        -> X.throw (BadValueRef cxt ix)
 
-mdString :: [String] -> MetadataTable -> Int -> String
+mdString :: LookupMd m => [String] -> MetadataTable -> Int -> m String
 mdString cxt mt ix =
-  fromMaybe (throw (BadValueRef cxt ix)) (mdStringOrNull cxt mt ix)
+  case mdStringOrNull cxt mt ix of
+    Just str -> str
+    Nothing  -> X.throw (BadValueRef cxt ix)
 
-mdStringOrNull :: [String] -> MetadataTable -> Int -> Maybe String
+mdStringOrNull :: LookupMd m
+               => [String]
+               -> MetadataTable
+               -> Int
+               -> Maybe (m String)
 mdStringOrNull cxt mt ix =
-  case mdForwardRefOrNull cxt mt ix of
-    Nothing -> Nothing
-    Just (ValMdString str) -> Just str
-    Just _ -> throw (BadTypeRef cxt ix)
+  case mdForwardRefOrNull mt ix of
+      Just y  -> pure $ flip fmap y $
+        \case
+          (ValMdString str) -> str
+          _                 -> X.throw (BadTypeRef cxt ix)
+      Nothing -> Nothing
 
 mkMdRefTable :: MetadataTable -> MdRefTable
 mkMdRefTable mt = Map.mapMaybe step (mtNodes mt)
@@ -137,10 +163,10 @@ mkMdRefTable mt = Map.mapMaybe step (mtNodes mt)
 
 -- ** LookupMd
 
--- | LookupMd m a
+-- | @LookupMd m a
 --   = Lookup m (Typed PValue) a
 --   = ReaderM m (Int -> m (Typed PValue)) a
---   = (Int -> m (Typed PValue)) -> m a
+--   = (Int -> m (Typed PValue)) -> m a@
 type LookupMd m = Lookup m Int (Typed PValue)
 
 -- ** PartialMetadata
@@ -167,10 +193,15 @@ emptyPartialMetadata globals es = PartialMetadata
   , pmGlobalAttachments= Map.empty
   }
 
-updateMetadataTable :: Functor m
+updateMetadataTable :: Functor f
                     => (MetadataTable -> MetadataTable)
-                    -> (PartialMetadata m -> PartialMetadata m)
+                    -> (PartialMetadata f -> PartialMetadata f)
 updateMetadataTable f pm = pm { pmEntries = f <$> pmEntries pm }
+
+updateMetadataTableA :: Applicative f
+                     => f (MetadataTable -> MetadataTable)
+                     -> (PartialMetadata f -> PartialMetadata f)
+updateMetadataTableA f pm = pm { pmEntries = f <*> pmEntries pm }
 
 addGlobalAttachments ::
   Symbol {- ^ name of the global to attach to ^ -} ->
