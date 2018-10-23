@@ -1,3 +1,4 @@
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -48,7 +49,7 @@ import           Data.LLVM.BitCode.IR.Metadata.Table
 -- to not have to rely on it.
 parseMetadataEntry :: forall m. LookupMd m
                    => ValueTable
-                   -> MetadataTable
+                   -> MetadataTableM m
                    -> PartialMetadata m
                    -> Entry
                    -> Parse (PartialMetadata m)
@@ -606,15 +607,14 @@ parseGlobalObjectAttachment mt r = label "parseGlobalObjectAttachment" $
 -- | Parse a metadata node.
 parseMetadataNode :: LookupMd f
                   => Bool
-                  -> MetadataTable
+                  -> MetadataTableM m
                   -> Record
                   -> PartialMetadata f
                   -> Parse (PartialMetadata f)
 parseMetadataNode isDistinct mt r pm = do
   ixs <- parseFields r 0 numeric
   let foo = traverse (mdForwardRefOrNull' mt) ixs
-  return $! updateMetadataTableA
-    (addNode isDistinct <$> foo) pm
+  return $! updateMetadataTable (addNode isDistinct <$> foo) pm
 
 
 -- | Parse out a metadata node in the old format.

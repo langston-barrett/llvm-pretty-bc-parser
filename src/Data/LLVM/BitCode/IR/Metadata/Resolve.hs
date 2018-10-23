@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -10,12 +9,19 @@ Copyright   : (c) Galois, Inc 2018
 License     : BSD-3
 Maintainer  : atomb@galois.com
 Stability   : experimental
+
+TODO: This module could have better debugging support.
+'resolveSome' and 'resolveAll' could be in 'Writer' monads which record progress
+in the resolution process.
 -}
 
 module Data.LLVM.BitCode.IR.Metadata.Resolve where
 
 -- import qualified Data.Text as Text
 -- import           Data.Text (Text)
+import           Control.Arrow (first)
+import qualified Data.Set as Set
+import           Data.Set (Set)
 import qualified Data.Map as Map
 import           Data.Map (Map)
 import           MonadLib
@@ -27,8 +33,8 @@ import           Data.LLVM.BitCode.Parse
 import           Text.LLVM.AST
 import           Text.LLVM.Labels (relabel)
 
+import           Data.LLVM.BitCode.IR.Metadata.Applicative
 import           Data.LLVM.BitCode.IR.Metadata.Table
-import           Data.LLVM.BitCode.IR.Metadata.Lookup
 
 -- ** Finalizing names
 
@@ -54,35 +60,33 @@ finalizePValMd = relabel (const requireBbEntryName)
 unnamedEntries :: forall m. LookupMd m
                => PartialMetadata m -> m ([PartialUnnamedMd], [PartialUnnamedMd])
 unnamedEntries pm =
-  partitionEithers . catMaybes <$>
-    (traverse resolveNode =<< (Map.toList . mtNodes <$> mt))
+  partitionEithers . catMaybes <$> traverse resolveNode (Map.toList $ mtNodes mt)
   where
     mt = pmEntries pm
 
-    resolveNode :: (Int, (Bool, Bool, Int)) -> m (Maybe (Either PartialUnnamedMd PartialUnnamedMd))
-    resolveNode (ref, (fnLocal, d, ix)) =
-      flip fmap (lookupNode ref d ix) $
-        \case
-          Just pum | fnLocal   -> Just $ Left  pum
-                   | otherwise -> Just $ Right pum
+    resolveNode :: (Int, m (Bool, Bool, Int)) -> m (Maybe (Either PartialUnnamedMd PartialUnnamedMd))
+    resolveNode (ref, s) = do
+      (fnLocal, d, ix) <- s
+      case lookupNode ref d ix of
+        Just pum | fnLocal   -> pure $ Just $ Left pum
+                 | otherwise -> pure $ Just $ Right pum
 
-          -- TODO: is this silently eating errors with metadata that's not in the
-          -- value table?
-          Nothing              -> Nothing
+        -- TODO: is this silently eating errors with metadata that's not in the
+        -- value table?
+        Nothing              -> pure Nothing
 
-    lookupNode :: Int -> Bool -> Int -> m (Maybe PartialUnnamedMd)
+    lookupNode :: Int -> Bool -> Int -> Maybe PartialUnnamedMd
     lookupNode ref d ix =
-      let looked :: m (Maybe (Typed PValue))
-          looked = lookupValueTableAbs ref . mtEntries <$> mt
-      in flip fmap looked $
-          \case
-            Just Typed{ typedValue = ValMd v } ->
-              return PartialUnnamedMd
-                { pumIndex  = ix
-                , pumValues = v
-                , pumDistinct = d
-                }
-            _ -> Nothing
+      let looked :: Maybe (Typed PValue)
+          looked = lookupValueTableAbs ref (mtEntries mt)
+      in case looked of
+        Just Typed{ typedValue = ValMd v } ->
+          Just PartialUnnamedMd
+            { pumIndex  = ix
+            , pumValues = v
+            , pumDistinct = d
+            }
+        _ -> Nothing
 
 type ParsedMetadata =
   ( [NamedMd]
@@ -99,7 +103,10 @@ parsedMetadata pm =
   <*> unnamedEntries pm
   <*> pure (pmInstrAttachments pm)
   <*> pure (pmFnAttachments pm)
-  <*> pmGlobalAttachments pm
+  <*> seqMap (pmGlobalAttachments pm)
+  where -- Sequence applicative actions in the keys of a map
+        seqMap :: (Ord a, Applicative n) => Map a (n b) -> n (Map a b)
+        seqMap m = fmap Map.fromList $ traverse (tupleA . first pure) $ Map.toList m
 
 -- ** Resolve monad stack
 
@@ -119,7 +126,6 @@ runResolveT m i rt = fst <$> runStateT m (runWriterT (runReaderT i rt))
 
 -- ** Resolve
 
--- The algorithm is deceptively simple:
 -- We pass in a "monadic lookup function" that simply looks to see if the
 -- request is already "cached" in the @Map@ which is the state. If not,
 -- it raises an exception, short-circuiting the evaluation of that reference.
@@ -139,53 +145,55 @@ lookupStateExcept i = do
     Just v  -> pure v
     Nothing -> raise i
 
--- | Abstract monad stack
-runLookup :: forall m i v a. (Ord i, StateM m (Map i v), ExceptionM m i)
-          => ReaderT (i -> m v) m a
-          -> m a
-runLookup = runReaderT lookupStateExcept
+type StateExceptT s e m a = StateT s (ExceptionT e m) a
+type StateExcept  s e a   = StateExceptT s e Id a
 
--- | Concrete monad stack
-runLookup' :: forall k v a. (Ord k)
-          => (forall m. ReaderT (k -> m v) m a)
-          -> (ExceptionT k (State (Map k v))) a
-          -- -> (StateT (Map k v) (Exception k)) a
-runLookup' = runLookup
+-- | Take a map with keys that need a lookup table. Pass it 'lookupStateExcept'
+-- and run it with the current state. If it raises an exception, put that in the
+-- value. If it doesn't, cache the result in the state for the subsequent
+-- computations.
+resolveSome :: forall k v. (Ord k)
+            => (forall m. Map k (ReaderT (k -> m v) m v))
+            -> State (Map k v) (Map k (Either k v))
+resolveSome mp =
+  let -- First, feed lookupStateExcept through all the readers.
+      mp' :: Map k (StateExcept (Map k v) k v)
+      mp' = fmap (runReaderT lookupStateExcept) mp
+  in -- For each key/monadic value pair,
+     forM mp' $ \sev -> do -- sev: "state-except value"
+      st <- get
+      -- Run the value with the current state.
+      case runId $ runExceptionT (runStateT st sev) of
+        Left i              ->
+          -- If it raised an exception, just feed that on through.
+          pure $ Left i
+        Right (v, newState) -> do
+          -- Otherwise, merge any updated state (resolved references),
+          sets_ (Map.union newState)
+          -- And pass the rest on through.
+          pure $ Right v
 
-loop :: forall k v a. (Ord k)
-     => (forall m. ReaderT (k -> m v) m (Map k v))
-     -> k
-     -> State (Map k v) (Either Int v)
-loop c k = do
-  foo <- run c
-  case foo of
-    Left  i ->
-      -- It couldn't be looked up in the state, so recurse
-      -- on the exception value
-      loop c i
-    Right j -> do
-      sets_ (Map.insert k j)
-      _
-      -- pure (Right j)
-  where run :: (forall m. ReaderT (k -> m v) m (Map k v))
-            -> State (Map k v) (Either k (Map k v))
-        run ll = runExceptionT $ runLookup' ll
+-- | Repeatedly call 'resolveSome' until every reference has been resolved.
+--
+-- If some node @a@ references a node @b@ which doesn't appear in the AST (due
+-- to an implementation error in the parser or malformed input), then this
+-- @Left s@ where @s@ contains @(a, b)@.
+resolveAll :: forall k v. (Ord k)
+           => (forall m. Map k (ReaderT (k -> m v) m v))
+           -> Either (Set (k, k)) (Map k v)
+resolveAll mp = fst <$> runState Map.empty $ do
+  mp' <- resolveSome mp
 
--- alg :: forall i v a. (Ord i)
---     => (forall m. ReaderT (i -> m v) m (Map i v))
---     -> State (Map i v) a
--- alg l = do
---   r <- run l
---   case r of
---     Left i  -> _
---       -- x <- run i
---     Right j -> _
---   where run :: (forall m. ReaderT (i -> m v) m (Map i v))
---             -> State (Map i v) (Either i (Map i v))
---         run ll = runExceptionT $ runLookup' ll
+  -- Unresolvable references are those that don't appear in the parse tree.
+  -- First element is the referencer, second is the referencee.
+  let lefts :: Set (k, k)
+      lefts = Set.fromList $
+        Map.foldrWithKey
+          (\k v acc -> either (\ref -> (k, ref):acc) (const acc) v) [] mp'
 
-specialize :: Monad n
-           => (forall m. ReaderM m i => m a)
-           -> ReaderT i n a
-specialize r = r
-
+  if not $ Set.null $ Set.difference (Set.map snd lefts) (Map.keysSet mp')
+  then pure $ Left lefts
+  else
+    if   Set.size lefts == 0    -- If everything was resolved,
+    then Right <$> get          -- then we're done, and the state holds the results.
+    else pure $ resolveAll mp   -- Otherwise, repeat with new state

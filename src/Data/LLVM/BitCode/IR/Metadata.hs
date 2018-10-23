@@ -1,5 +1,3 @@
-{-# LANGUAGE RecursiveDo #-}
-
 {-|
 Module      : Data.LLVM.BitCode.IR.Metadata
 Description : Parsing metadata blocks
@@ -21,13 +19,15 @@ module Data.LLVM.BitCode.IR.Metadata (
   , PGlobalAttachments
   ) where
 
-import Control.Monad (foldM)
+import           Control.Monad (foldM)
+import qualified Data.Map as Map
 
-import Data.LLVM.BitCode.Bitstream (Entry)
-import Data.LLVM.BitCode.Parse
+import           Data.LLVM.BitCode.Bitstream (Entry)
+import           Data.LLVM.BitCode.Parse
 
-import Data.LLVM.BitCode.IR.Metadata.Parse
-import Data.LLVM.BitCode.IR.Metadata.Table
+import           Data.LLVM.BitCode.IR.Metadata.Parse
+import           Data.LLVM.BitCode.IR.Metadata.Table
+import           Data.LLVM.BitCode.IR.Metadata.Resolve
 
 -- | This is the entrypoint parsing a metadata block, it is called from e.g.
 -- 'parseModule'.
@@ -37,8 +37,9 @@ parseMetadataBlock ::
 parseMetadataBlock globals vt es = label "METADATA_BLOCK" $ do
   ms <- getMdTable
   let pm0 = emptyPartialMetadata globals ms
-  rec pm <- foldM (parseMetadataEntry vt (pmEntries pm)) pm0 es
+  pm <- foldM (parseMetadataEntry vt (emptyMetadataTable globals ms)) pm0 es
   let entries = pmEntries pm
-  setMdTable (mtEntries entries)
-  setMdRefs  (mkMdRefTable entries)
-  return (parsedMetadata pm)
+  _
+  -- setMdTable (mtEntries    entries)
+  -- setMdRefs  (mkMdRefTable entries)
+  -- return (parsedMetadata pm)

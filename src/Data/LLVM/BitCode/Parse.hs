@@ -1,10 +1,11 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 
 module Data.LLVM.BitCode.Parse where
 
@@ -258,12 +259,15 @@ type PValue = Value' Int
 
 type PInstr = Instr' Int
 
-data ValueTable = ValueTable
-  { valueNextId  :: !Int
-  , valueEntries :: Map.Map Int (Typed PValue)
+-- | A value table with entries in the type @a@
+data ValueTable' a = ValueTable
+  { valueNextId   :: !Int
+  , valueEntries  :: Map.Map Int a
   , strtabEntries :: Map.Map Int (Int, Int)
-  , valueRelIds  :: Bool
-  } deriving (Show)
+  , valueRelIds   :: Bool
+  } deriving (Show, Ord, Eq, Functor)
+
+type ValueTable = ValueTable' (Typed PValue)
 
 emptyValueTable :: Bool -> ValueTable
 emptyValueTable rel = ValueTable
@@ -273,10 +277,10 @@ emptyValueTable rel = ValueTable
   , valueRelIds  = rel
   }
 
-addValue :: Typed PValue -> ValueTable -> ValueTable
+addValue :: a -> ValueTable' a -> ValueTable' a
 addValue tv vs = snd (addValue' tv vs)
 
-addValue' :: Typed PValue -> ValueTable -> (Int,ValueTable)
+addValue' :: a -> ValueTable' a -> (Int, ValueTable' a)
 addValue' tv vs = (valueNextId vs,vs')
   where
   vs' = vs
@@ -376,7 +380,8 @@ fixValueTable_ k = fixValueTable $ \ vt -> do
 
 type PValMd = ValMd' Int
 
-type MdTable = ValueTable
+type MdTable' a = ValueTable' a
+type MdTable    = MdTable' (Typed PValue)
 
 getMdTable :: Parse MdTable
 getMdTable  = Parse (psMdTable <$> get)

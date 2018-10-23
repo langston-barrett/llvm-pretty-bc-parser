@@ -28,7 +28,8 @@ module Data.LLVM.BitCode.IR.Metadata.Applicative
   , (<<<*>)
   , (<*<*>)
     -- * Miscellaneous
-  , tupleA
+  , tupleA2
+  , tupleA3
   , commuteMaybe
   ) where
 
@@ -99,8 +100,11 @@ j <*<*> x = getCompose2 $ Compose2 j <*> Compose2 (pure <$> x)
 -- ** Miscellaneous
 
 -- | You can pull a functor out of a tuple if its an applicative
-tupleA :: Applicative f => (f a, f b) -> f (a, b)
-tupleA (f, s) = (,) <$> f <*> s
+tupleA2 :: Applicative f => (f a, f b) -> f (a, b)
+tupleA2 (f, s) = (,) <$> f <*> s
+
+tupleA3 :: Applicative f => (f a, f b, f c) -> f (a, b, c)
+tupleA3 (f, s, t) = (,,) <$> f <*> s <*> t
 
 -- | Commute an applicative with Maybe
 commuteMaybe :: Applicative f => Maybe (f a) -> f (Maybe a)
