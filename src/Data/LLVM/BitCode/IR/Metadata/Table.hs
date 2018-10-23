@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-|
 Module      : Data.LLVM.BitCode.IR.Metadata.Table
 Description : The parsing state for metadata blocks
@@ -18,24 +19,27 @@ module Data.LLVM.BitCode.IR.Metadata.Table where
 
 import Data.LLVM.BitCode.Parse
 import Text.LLVM.AST
-import Text.LLVM.Labels
 
+import           MonadLib.Monads (Id)
 import           Control.Monad (guard)
 import qualified Control.Exception as X
---import Data.Maybe (fromMaybe)
 import qualified Data.Map as Map
 
 import Data.LLVM.BitCode.IR.Metadata.Lookup
+import Data.LLVM.BitCode.IR.Metadata.Applicative
 
 -- ** MetadataTable
 
-data MetadataTable = MetadataTable
-  { mtEntries   :: MdTable
+-- | A metadata table where the mapped values are computed in the monad m.
+data MetadataTable' a b = MetadataTable
+  { mtEntries   :: MdTable' a
   , mtNextNode  :: !Int
-  , mtNodes     :: Map.Map Int (Bool,Bool,Int)
+  , mtNodes     :: Map.Map Int b
                    -- ^ The entries in the map are: is the entry function local,
                    -- is the entry distinct, and the implicit id for the node.
-  } deriving (Show)
+  }
+
+type MetadataTable = MetadataTable' (Typed PValue) (Bool, Bool, Int)
 
 emptyMetadataTable ::
   Int {- ^ globals seen so far -} ->
@@ -128,6 +132,11 @@ mdForwardRefOrNull :: LookupMd m
 mdForwardRefOrNull mt ix | ix > 0 = Just (mdForwardRef mt (ix - 1))
                          | otherwise = Nothing
 
+-- | This version is useful in 'Compose'd blocks
+mdForwardRefOrNull' :: LookupMd m
+                    => MetadataTable -> Int -> m (Maybe PValMd)
+mdForwardRefOrNull' x = commuteMaybe . mdForwardRefOrNull x
+
 mdNodeRef :: Functor f => [String] -> f MetadataTable -> Int -> f Int
 mdNodeRef cxt mt ix =
   flip fmap (Map.lookup ix <$> (mtNodes <$> mt)) $
@@ -154,6 +163,11 @@ mdStringOrNull cxt mt ix =
           _                 -> X.throw (BadTypeRef cxt ix)
       Nothing -> Nothing
 
+-- | This version is useful in 'Compose'd blocks
+mdStringOrNull' :: LookupMd m
+                => [String] -> MetadataTable -> Int -> m (Maybe String)
+mdStringOrNull' cxt mt = commuteMaybe . mdStringOrNull cxt mt
+
 mkMdRefTable :: MetadataTable -> MdRefTable
 mkMdRefTable mt = Map.mapMaybe step (mtNodes mt)
   where
@@ -171,13 +185,15 @@ type LookupMd m = Lookup m Int (Typed PValue)
 
 -- ** PartialMetadata
 
+-- | The fields wrapped in a @m@ are the ones that use forward references while
+-- they're being parsed.
 data PartialMetadata m = PartialMetadata
-  { pmEntries          :: LookupMd m => m MetadataTable
-  , pmNamedEntries     :: Map.Map String [Int]
+  { pmEntries          :: MetadataTable'      (m (Typed PValue)) (m (Bool, Bool, Int))
+  , pmNamedEntries     :: Map.Map String      (m [Int])
+  , pmGlobalAttachments:: PGlobalAttachments' (m (Map.Map KindMd PValMd))
   , pmNextName         :: Maybe String
   , pmInstrAttachments :: InstrMdAttachments
   , pmFnAttachments    :: PFnMdAttachments
-  , pmGlobalAttachments:: PGlobalAttachments
   }
 
 emptyPartialMetadata :: Applicative m
@@ -185,12 +201,12 @@ emptyPartialMetadata :: Applicative m
                      -> MdTable
                      -> PartialMetadata m
 emptyPartialMetadata globals es = PartialMetadata
-  { pmEntries          = pure $ emptyMetadataTable globals es
-  , pmNamedEntries     = Map.empty
-  , pmNextName         = Nothing
-  , pmInstrAttachments = Map.empty
-  , pmFnAttachments    = Map.empty
-  , pmGlobalAttachments= Map.empty
+  { pmEntries           = pure <$> emptyMetadataTable globals es
+  , pmNamedEntries      = pure Map.empty
+  , pmNextName          = Nothing
+  , pmInstrAttachments  = Map.empty
+  , pmFnAttachments     = Map.empty
+  , pmGlobalAttachments = pure Map.empty
   }
 
 updateMetadataTable :: Functor f
@@ -203,12 +219,13 @@ updateMetadataTableA :: Applicative f
                      -> (PartialMetadata f -> PartialMetadata f)
 updateMetadataTableA f pm = pm { pmEntries = f <*> pmEntries pm }
 
-addGlobalAttachments ::
+addGlobalAttachmentsA :: Applicative m =>
   Symbol {- ^ name of the global to attach to ^ -} ->
-  Map.Map KindMd PValMd {- ^ metadata references to attach ^ -} ->
+  m (Map.Map KindMd PValMd) {- ^ metadata references to attach ^ -} ->
   (PartialMetadata m -> PartialMetadata m)
-addGlobalAttachments sym mds pm =
-  pm { pmGlobalAttachments = Map.insert sym mds (pmGlobalAttachments pm)
+addGlobalAttachmentsA sym mds pm =
+  pm { pmGlobalAttachments =
+         Map.insert sym <$> mds <*> pmGlobalAttachments pm
      }
 
 setNextName :: String -> PartialMetadata m -> PartialMetadata m
@@ -224,82 +241,23 @@ addInstrAttachment :: Int -> [(KindMd,PValMd)]
 addInstrAttachment instr md pm =
   pm { pmInstrAttachments = Map.insert instr md (pmInstrAttachments pm) }
 
-nameMetadata :: [Int] -> PartialMetadata m -> Parse (PartialMetadata m)
-nameMetadata val pm = case pmNextName pm of
+nameMetadataA :: Applicative m
+              => m [Int] -> PartialMetadata m -> Parse (PartialMetadata m)
+nameMetadataA val pm = case pmNextName pm of
   Just name -> return $! pm
     { pmNextName     = Nothing
-    , pmNamedEntries = Map.insert name val (pmNamedEntries pm)
+    , pmNamedEntries = Map.insert name <$> val <*> pmNamedEntries pm
     }
   Nothing -> fail "Expected a metadata name"
 
-namedEntries :: PartialMetadata m -> [NamedMd]
-namedEntries  = map (uncurry NamedMd)
-              . Map.toList
+
+namedEntries :: LookupMd m => PartialMetadata m -> m [NamedMd]
+namedEntries  = fmap (map (uncurry NamedMd) . Map.toList)
               . pmNamedEntries
 
-data PartialUnnamedMd = PartialUnnamedMd
-  { pumIndex    :: Int
-  , pumValues   :: PValMd
-  , pumDistinct :: Bool
-  } deriving (Show)
 
-finalizePartialUnnamedMd :: PartialUnnamedMd -> Parse UnnamedMd
-finalizePartialUnnamedMd pum = mkUnnamedMd `fmap` finalizePValMd (pumValues pum)
-  where
-  mkUnnamedMd v = UnnamedMd
-    { umIndex  = pumIndex pum
-    , umValues = v
-    , umDistinct = pumDistinct pum
-    }
-
-finalizePValMd :: PValMd -> Parse ValMd
-finalizePValMd = relabel (const requireBbEntryName)
-
--- | Partition unnamed entries into global and function local unnamed entries.
-{-
-unnamedEntries :: PartialMetadata m -> ([PartialUnnamedMd],[PartialUnnamedMd])
-unnamedEntries pm = foldl resolveNode ([],[]) (Map.toList (mtNodes mt))
-  where
-  mt = pmEntries pm
-
-  resolveNode (gs,fs) (ref,(fnLocal,d,ix)) = case lookupNode ref d ix of
-    Just pum | fnLocal   -> (gs,pum:fs)
-             | otherwise -> (pum:gs,fs)
-
-    -- TODO: is this silently eating errors with metadata that's not in the
-    -- value table?
-    Nothing              -> (gs,fs)
-
-  lookupNode ref d ix = do
-    Typed { typedValue = ValMd v } <- lookupValueTableAbs ref (mtEntries mt)
-    return PartialUnnamedMd
-      { pumIndex  = ix
-      , pumValues = v
-      , pumDistinct = d
-      }
--}
-
-type InstrMdAttachments = Map.Map Int [(KindMd,PValMd)]
-
-type PKindMd = Int
-type PFnMdAttachments = Map.Map PKindMd PValMd
-type PGlobalAttachments = Map.Map Symbol (Map.Map KindMd PValMd)
-
-type ParsedMetadata =
-  ( [NamedMd]
-  , ([PartialUnnamedMd],[PartialUnnamedMd])
-  , InstrMdAttachments
-  , PFnMdAttachments
-  , PGlobalAttachments
-  )
-
-{-
-parsedMetadata :: PartialMetadata m -> ParsedMetadata
-parsedMetadata pm =
-  ( namedEntries pm
-  , unnamedEntries pm
-  , pmInstrAttachments pm
-  , pmFnAttachments pm
-  , pmGlobalAttachments pm
-  )
--}
+type PKindMd               = Int
+type InstrMdAttachments    = Map.Map Int [(KindMd,PValMd)]
+type PFnMdAttachments      = Map.Map PKindMd PValMd
+type PGlobalAttachments' v = Map.Map Symbol v
+type PGlobalAttachments    = Map.Map Symbol (Map.Map KindMd PValMd)

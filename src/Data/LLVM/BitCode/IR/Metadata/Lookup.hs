@@ -18,6 +18,8 @@ import MonadLib (ReaderM, ask)
 -- | A computation that depends on having access to a "monadic lookup table"
 --
 -- We could replace the second @m@ by @n@ and the constraint @BaseM n m@.
+--
+-- Note that @Lookup m i v :: Constraint@.
 type Lookup m i v = ReaderM m (i -> m v)
 
 -- | In case we ever need to print an incomplete table (e.g. while debugging)
@@ -25,10 +27,15 @@ type Lookup m i v = ReaderM m (i -> m v)
 --   show _ = "[Metadata with unresolved references]"
 
 -- | Resolve a single forward reference.
+withLookupM :: Lookup m i v
+            => i          -- ^ Index to resolve
+            -> (v -> m a) -- ^ Function of the result
+            -> m a
+withLookupM i cont = cont =<< ($i) =<< ask
+
+-- | Resolve a single forward reference.
 withLookup :: Lookup m i v
            => i        -- ^ Index to resolve
            -> (v -> a) -- ^ Function of the result
-           -> m a      -- ~=~ ReaderT (Int -> f b) f a
-withLookup i cont = do
-  look <- ask
-  cont <$> look i
+           -> m a
+withLookup i cont = withLookupM i (pure . cont)
