@@ -43,6 +43,8 @@ Library
                        Data.LLVM.BitCode.IR.Metadata.Applicative,
                        Data.LLVM.BitCode.IR.Metadata.Parse,
                        Data.LLVM.BitCode.IR.Metadata.Table,
+                       Data.LLVM.BitCode.IR.Metadata.Resolve,
+                       Data.LLVM.BitCode.IR.Metadata.Lookup,
                        Data.LLVM.BitCode.IR.Module,
                        Data.LLVM.BitCode.IR.Types,
                        Data.LLVM.BitCode.IR.Values,
@@ -52,16 +54,19 @@ Library
 
   Ghc-options:         -Wall
 
-  Build-depends:       base       >= 4 && < 5,
-                       containers >= 0.4,
-                       array      >= 0.3,
-                       pretty     >= 1.0.1,
-                       monadLib   >= 3.7.2,
-                       fgl        >= 5.5,
-                       cereal     >= 0.3.5.2,
-                       bytestring >= 0.9.1,
-                       utf8-string>= 1.0,
-                       llvm-pretty>= 0.7.3
+  Build-depends:       base          >= 4 && < 5,
+                       containers    >= 0.4,
+                       array         >= 0.3,
+                       pretty        >= 1.0.1,
+                       monadLib      >= 3.7.2,
+                       fgl           >= 5.5,
+                       cereal        >= 0.3.5.2,
+                       bytestring    >= 0.9.1,
+                       utf8-string   >= 1.0,
+                       microlens     >= 0.4,
+                       microlens-th  >= 0.4,
+                       text          -any,
+                       llvm-pretty   >= 0.7.3
 
 Executable llvm-disasm
   Main-is:             LLVMDis.hs
@@ -116,6 +121,7 @@ Executable fuzz-llvm-disasm
                        transformers,
                        llvm-pretty>= 0.7.3,
                        llvm-pretty-bc-parser
+  -- run "cabal configure -f fuzz && cabal run fuzz-llvm-disasm"
   if flag(fuzz)
       Buildable:       True
   else

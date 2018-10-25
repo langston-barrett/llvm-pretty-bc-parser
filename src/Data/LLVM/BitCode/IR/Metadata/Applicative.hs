@@ -31,9 +31,13 @@ module Data.LLVM.BitCode.IR.Metadata.Applicative
   , tupleA2
   , tupleA3
   , commuteMaybe
+  , seqMap
   ) where
 
-import Data.Functor.Compose (Compose(..))
+import           Control.Arrow (first)
+import           Data.Functor.Compose (Compose(..))
+import           Data.Map (Map)
+import qualified Data.Map as Map
 
 -- ** 2-fold composition
 
@@ -110,3 +114,7 @@ tupleA3 (f, s, t) = (,,) <$> f <*> s <*> t
 commuteMaybe :: Applicative f => Maybe (f a) -> f (Maybe a)
 commuteMaybe (Just val) = Just <$> val
 commuteMaybe Nothing    = pure Nothing
+
+-- | Sequence applicative actions in the keys of a map
+seqMap :: (Ord a, Applicative n) => Map a (n b) -> n (Map a b)
+seqMap m = fmap Map.fromList $ traverse (tupleA2 . first pure) $ Map.toList m

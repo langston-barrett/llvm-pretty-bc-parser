@@ -317,7 +317,7 @@ translateValueId vt n | valueRelIds vt = fromIntegral adjusted
   adjusted  = fromIntegral (valueNextId vt - n)
 
 -- | Lookup an absolute address in the value table.
-lookupValueTableAbs :: Int -> ValueTable -> Maybe (Typed PValue)
+lookupValueTableAbs :: Int -> ValueTable' a -> Maybe a
 lookupValueTableAbs n values = Map.lookup n (valueEntries values)
 
 -- | When you know you have an absolute index.

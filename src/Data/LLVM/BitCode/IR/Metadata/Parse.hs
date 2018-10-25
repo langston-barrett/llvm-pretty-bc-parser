@@ -29,6 +29,7 @@ import           Text.LLVM.AST
 
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
 import           Control.Monad (mplus, unless, when)
+import           Lens.Micro hiding (ix)
 import           Data.List (mapAccumL)
 import           Data.Bits (shiftR, testBit, shiftL)
 import           Data.Word (Word32,Word64)
@@ -47,18 +48,20 @@ import           Data.LLVM.BitCode.IR.Metadata.Table
 -- XXX this currently relies on the constant block having been parsed already.
 -- Though most bitcode examples I've seen are ordered this way, it would be nice
 -- to not have to rely on it.
-parseMetadataEntry :: forall m. LookupMd m
+parseMetadataEntry :: forall f. Applicative f
                    => ValueTable
-                   -> MetadataTableM m
-                   -> PartialMetadata m
+                   -> MetadataTableM  (LookupMd f)
+                   -- ^ TODO: Should this be refactored out?
+                   -> PartialMetadata (LookupMd f)
                    -> Entry
-                   -> Parse (PartialMetadata m)
+                   -> Parse (PartialMetadata (LookupMd f))
 parseMetadataEntry vt mt pm (fromEntry -> Just r) =
  case recordCode r of
   -- [values]
   1 -> label "METADATA_STRING" $ do
     str <- fmap UTF8.decode (parseFields r 0 char) `mplus` parseField r 0 string
-    return $! updateMetadataTable (addString str) pm
+    return $! pm &  pmEntries            -- Get the metadatatable
+                 %~ addString (pure str) -- Add a string to it
 
   -- [type num, value num]
   2 -> label "METADATA_VALUE" $ do
@@ -74,8 +77,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     ix  <- field 1 numeric
     let tv = forwardRef cxt ix vt
 
-    return $! updateMetadataTable (addMdValue tv) pm
-
+    return $! pm &  pmEntries            -- Get the metadatatable
+                 %~ addMdValue (pure tv) -- Add a value to it
 
   -- [n x md num]
   3 -> label "METADATA_NODE" (parseMetadataNode False mt r pm)
@@ -102,12 +105,13 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     -- bitcode. /sigh/
     let field = parseField r
     isDistinct <- field 0 nonzero
-    loc'       <- DebugLoc
+    loc'       <- DebugLoc -- Parse . (Reader (LookupMd f)) . Maybe . f
       <<$> field 1 numeric                              -- dlLine
       <<*> field 2 numeric                              -- dlCol
       <**> (mdForwardRef        mt <$> field 3 numeric) -- dlScope
       <**> (mdForwardRefOrNull' mt <$> field 4 numeric) -- dlIA
-    return $! updateMetadataTableA (addLoc isDistinct <$> loc') pm
+    return $! pm &  pmEntries
+                 %~ addLoc isDistinct loc'
 
   -- [n x (type num, value num)]
   8 -> label "METADATA_OLD_NODE" (parseMetadataOldNode False vt mt r pm)
@@ -116,12 +120,10 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
   9 -> label "METADATA_OLD_FN_NODE" (parseMetadataOldNode True vt mt r pm)
 
   -- [n x mdnodes]
-  -- 10 -> label "METADATA_NAMED_NODE" $ do
-  --   mdIds <- parseFields r 0 numeric
-  --   cxt   <- getContext
-  --   let ids :: m [Int]
-  --       ids = traverse (mdNodeRef cxt $ pure mt) mdIds
-  --   nameMetadataA <$> ids <*> pure pm
+  10 -> label "METADATA_NAMED_NODE" $ do
+    mdIds <- parseFields r 0 numeric
+    cxt   <- getContext
+    nameMetadataA (traverse (mdNodeRef cxt mt) mdIds) pm
 
   -- [m x [value, [n x [id, mdnode]]]
   11 -> label "METADATA_ATTACHMENT" $ do
@@ -151,8 +153,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     diNode         <- DISubrange
       <$> parseField r 1 numeric     -- disrCount
       <*> parseField r 2 signedInt64 -- disrLowerBound
-    return $! updateMetadataTable
-      (addDebugInfo isDistinct (DebugInfoSubrange diNode)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (pure $ DebugInfoSubrange diNode)
 
   -- [distinct, value, name]
   14 -> label "METADATA_ENUMERATOR" $ do
@@ -161,7 +163,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     diEnum     <- flip DebugInfoEnumerator
       <<$> parseField r 1 signedInt64                   -- value
       <**> (mdString ctx mt <$> parseField r 2 numeric) -- name
-    return $! updateMetadataTableA (addDebugInfo isDistinct <$> diEnum) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct diEnum
 
   15 -> label "METADATA_BASIC_TYPE" $ do
     ctx        <- getContext
@@ -172,8 +175,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       <<*> parseField r 3 numeric                       -- dibtSize
       <<*> parseField r 4 numeric                       -- dibtAlign
       <<*> parseField r 5 numeric                       -- dibtEncoding
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoBasicType <$> dibt)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoBasicType <$> dibt)
 
   -- [distinct, filename, directory]
   16 -> label "METADATA_FILE" $ do
@@ -182,8 +185,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     diFile     <- DIFile
       <$$> (mdString ctx mt <$> parseField r 1 numeric) -- difFilename
       <**> (mdString ctx mt <$> parseField r 2 numeric) -- difDirectory
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoFile <$> diFile)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoFile <$> diFile)
 
   17 -> label "METADATA_DERIVED_TYPE" $ do
     ctx        <- getContext
@@ -200,9 +203,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       <<*> parseField r 9 numeric                                  -- didtOffset
       <<*> parseField r 10 numeric                                 -- didtFlags
       <**> (mdForwardRefOrNull'    mt <$> parseField r 11 numeric) -- didtExtraData
-    return $!
-      updateMetadataTableA
-        (addDebugInfo isDistinct <$> (DebugInfoDerivedType <$> didt)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoDerivedType <$> didt)
 
   18 -> label "METADATA_COMPOSITE_TYPE" $ do
     ctx        <- getContext
@@ -223,16 +225,16 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       <**> (mdForwardRefOrNull'    mt <$> parseField r 13 numeric) -- dictVTableHolder
       <**> (mdForwardRefOrNull'    mt <$> parseField r 14 numeric) -- dictTemplateParams
       <**> (mdStringOrNull'    ctx mt <$> parseField r 15 numeric) -- dictIdentifier
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoCompositeType <$> dict)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoCompositeType <$> dict)
 
   19 -> label "METADATA_SUBROUTINE_TYPE" $ do
     isDistinct <- parseField r 0 nonzero
     dist       <- DISubroutineType
       <<$> parseField r 1 numeric                                 -- distFlags
       <**> (mdForwardRefOrNull'    mt <$> parseField r 2 numeric) -- distTypeArray
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoSubroutineType <$> dist)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoSubroutineType <$> dist)
 
   20 -> label "METADATA_COMPILE_UNIT" $ do
     let recordSize = length (recordFields r)
@@ -266,8 +268,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
            then pure True
            else parseField r 16 nonzero)                            -- dicuSplitDebugInlining
 
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoCompileUnit <$> dicu)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoCompileUnit <$> dicu)
 
 
   21 -> label "METADATA_SUBPROGRAM" $ do
@@ -310,8 +312,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     -- TODO: in the LLVM parser, it then goes into the metadata table
     -- and updates function entries to point to subprograms. Is that
     -- neccessary for us?
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoSubprogram <$> disp)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoSubprogram <$> disp)
 
   22 -> label "METADATA_LEXICAL_BLOCK" $ do
     when (length (recordFields r) /= 5)
@@ -322,8 +324,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       <**> (mdForwardRefOrNull' mt <$> parseField r 2 numeric) -- dilbFile
       <<*> parseField r 3 numeric                             -- dilbLine
       <<*> parseField r 4 numeric                             -- dilbColumn
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoLexicalBlock <$> dilb)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoLexicalBlock <$> dilb)
 
   23 -> label "METADATA_LEXICAL_BLOCK_FILE" $ do
     when (length (recordFields r) /= 4)
@@ -341,8 +343,9 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
 
     case dilbf of
       Just dilbf' ->
-        return $! updateMetadataTableA
-          (addDebugInfo isDistinct <$> (DebugInfoLexicalBlockFile <$> dilbf')) pm
+        return $!
+          pm &  pmEntries
+             %~ addDebugInfo isDistinct (DebugInfoLexicalBlockFile <$> dilbf')
       Nothing -> fail "Invalid record: scope field not present"
 
   24 -> label "METADATA_NAMESPACE" $ do
@@ -360,8 +363,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
             then return (pure (ValMdString ""))
             else mdForwardRef mt <$> parseField r 2 numeric)     -- dinsFile
       <<*> if isNew then return 0 else parseField r 4 numeric    -- dinsLine
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoNameSpace <$> dins)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoNameSpace <$> dins)
 
   25 -> label "METADATA_TEMPLATE_TYPE" $ do
     cxt        <- getContext
@@ -369,9 +372,9 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     dittp      <- DITemplateTypeParameter
       <$$> (mdString cxt mt <$> parseField r 1 numeric) -- dittpName
       <**> (mdForwardRef mt <$> parseField r 2 numeric) -- dittpType
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$>
-        (DebugInfoTemplateTypeParameter <$> dittp)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct
+                      (DebugInfoTemplateTypeParameter <$> dittp)
 
   26 -> label "METADATA_TEMPLATE_VALUE" $ do
     cxt        <- getContext
@@ -380,9 +383,9 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       <$$> (mdString cxt mt <$> parseField r 1 numeric) -- ditvpName
       <**> (mdForwardRef mt <$> parseField r 2 numeric) -- ditvpType
       <**> (mdForwardRef mt <$> parseField r 3 numeric) -- ditvpValue
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$>
-        (DebugInfoTemplateValueParameter <$> ditvp)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct
+                      (DebugInfoTemplateValueParameter <$> ditvp)
 
   27 -> label "METADATA_GLOBAL_VAR" $ do
     let len = length (recordFields r)
@@ -408,8 +411,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       <<*> if len > 11
            then Just                  <$> parseField r 11 numeric  -- digvAlignment
            else pure Nothing
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoGlobalVariable <$> digv)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoGlobalVariable <$> digv)
 
   28 -> label "METADATA_LOCAL_VAR" $ do
     -- this one is a bit funky:
@@ -450,16 +453,18 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
               <$> parseField r (adj 5) numeric) -- dilvType
       <<*> parseField r (adj 6) numeric         -- dilvArg
       <<*> parseField r (adj 7) numeric         -- dilvFlags
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoLocalVariable <$> dilv)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoLocalVariable <$> dilv)
 
   29 -> label "METADATA_EXPRESSION" $ do
     let recordSize = length (recordFields r)
     when (recordSize < 1)
       (fail "Invalid record")
-    isDistinct <- parseField r 0 nonzero
-    diExpr     <- DebugInfoExpression . DIExpression <$> parseFields r 1 numeric
-    return $! updateMetadataTable (addDebugInfo isDistinct diExpr) pm
+    isDistinct <- parseField  r 0 nonzero
+    diExpr     <- parseFields r 1 numeric
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct
+                      (pure $ DebugInfoExpression $ DIExpression diExpr)
 
   30 -> label "METADATA_OBJC_PROPERTY" $ fail "not yet implemented" -- TODO
   31 -> label "METADATA_IMPORTED_ENTITY" $ do
@@ -472,8 +477,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       <**> (mdForwardRefOrNull' mt <$> parseField r 3 numeric) -- diieEntity
       <<*> parseField r 4 numeric                              -- diieLine
 
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoImportedEntity <$> diie)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct (DebugInfoImportedEntity <$> diie)
 
   32 -> label "METADATA_MODULE" $
     -- cxt <- getContext
@@ -520,7 +525,8 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     let strings = snd (mapAccumL f bsStrings lengths)
           where f s i = case S.splitAt i s of
                           (str, rest) -> (rest, Char8.unpack str)
-    return $! updateMetadataTable (addStrings strings) pm
+    return $! pm &  pmEntries
+                 %~ addStrings (map pure strings)
 
   -- [ valueid, n x [id, mdnode] ]
   36 -> label "METADATA_GLOBAL_DECL_ATTACHMENT" $ do
@@ -544,8 +550,9 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
     digve      <- DIGlobalVariableExpression
       <$$> (mdForwardRefOrNull' mt <$> parseField r 1 numeric) -- digveVariable
       <**> (mdForwardRefOrNull' mt <$> parseField r 2 numeric) -- digveExpression
-    return $! updateMetadataTableA
-      (addDebugInfo isDistinct <$> (DebugInfoGlobalVariableExpression <$> digve)) pm
+    return $! pm &  pmEntries
+                 %~ addDebugInfo isDistinct
+                      (DebugInfoGlobalVariableExpression <$> digve)
 
   38 -> label "METADATA_INDEX_OFFSET" $ do
 
@@ -585,17 +592,16 @@ parseAttachment r l = loop (length (recordFields r) - 1) []
 
 -- | This is a named version of the metadata list that can show up at the end of
 -- a global declaration. It will be of the form @!dbg !2 [!dbg !n, ...]@.
-parseGlobalObjectAttachment :: forall m. LookupMd m
-                            => MetadataTable
+parseGlobalObjectAttachment :: Applicative f
+                            => MetadataTableM (LookupMd f)
                             -> Record
-                            -> Parse (m (Map KindMd PValMd))
+                            -> Parse ((LookupMd f) (Map KindMd PValMd))
 parseGlobalObjectAttachment mt r = label "parseGlobalObjectAttachment" $
   do cxt <- getContext
      go cxt (pure Map.empty) 1
   where
   len = length (recordFields r)
 
-  go :: [String] -> m (Map KindMd PValMd) -> Int -> Parse (m (Map KindMd PValMd))
   go cxt acc n | n < len =
     do kind <- getKind =<< parseField r n numeric
        i    <- parseField r (n + 1) numeric
@@ -605,31 +611,33 @@ parseGlobalObjectAttachment mt r = label "parseGlobalObjectAttachment" $
 
 
 -- | Parse a metadata node.
-parseMetadataNode :: LookupMd f
+parseMetadataNode :: Applicative f
                   => Bool
-                  -> MetadataTableM m
+                  -> MetadataTableM (LookupMd f)
                   -> Record
-                  -> PartialMetadata f
-                  -> Parse (PartialMetadata f)
+                  -> PartialMetadata (LookupMd f)
+                  -> Parse (PartialMetadata (LookupMd f))
 parseMetadataNode isDistinct mt r pm = do
   ixs <- parseFields r 0 numeric
   let foo = traverse (mdForwardRefOrNull' mt) ixs
-  return $! updateMetadataTable (addNode isDistinct <$> foo) pm
+  return $! pm &  pmEntries
+               %~ addNode isDistinct foo
 
 
 -- | Parse out a metadata node in the old format.
-parseMetadataOldNode :: forall m. LookupMd m
+parseMetadataOldNode :: forall f. Applicative f
                      => Bool
                      -> ValueTable
-                     -> MetadataTable
+                     -> MetadataTableM (LookupMd f)
                      -> Record
-                     -> PartialMetadata m
-                     -> Parse (PartialMetadata m)
+                     -> PartialMetadata (LookupMd f)
+                     -> Parse (PartialMetadata (LookupMd f))
 parseMetadataOldNode fnLocal vt mt r pm = do
   values <- loop =<< parseFields r 0 numeric
-  return $! updateMetadataTableA (addOldNode fnLocal <$> values) pm
+  return $! pm &  pmEntries
+               %~ addOldNode fnLocal values
   where
-    loop :: [Int] -> Parse (m [Typed PValue])
+    loop :: [Int] -> Parse (LookupMd f [Typed PValue])
     loop fs = case fs of
 
       tyId:valId:rest -> do
@@ -637,8 +645,7 @@ parseMetadataOldNode fnLocal vt mt r pm = do
         ty  <- getType' tyId
         val <- case ty of
           PrimType Metadata ->
-            let ref :: m PValMd
-                ref = mdForwardRef mt valId
+            let ref = mdForwardRef mt valId
             in pure $! Typed (PrimType Metadata) <$> (ValMd <$> ref)
           _ -> pure $! (pure $! forwardRef cxt valId vt) -- XXX need to check for a void type
 
