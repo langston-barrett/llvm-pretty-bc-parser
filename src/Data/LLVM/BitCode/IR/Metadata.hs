@@ -21,6 +21,7 @@ module Data.LLVM.BitCode.IR.Metadata (
   , PFnMdAttachments
   , PKindMd
   , PGlobalAttachments
+  , ParsedMetadata
   ) where
 
 import           MonadLib
@@ -36,6 +37,7 @@ import           Data.LLVM.BitCode.Bitstream (Entry)
 import           Data.LLVM.BitCode.Parse
 
 import           Data.LLVM.BitCode.IR.Metadata.Applicative
+import           Data.LLVM.BitCode.IR.Metadata.Finalize
 import           Data.LLVM.BitCode.IR.Metadata.Parse
 import           Data.LLVM.BitCode.IR.Metadata.Resolve
 import           Data.LLVM.BitCode.IR.Metadata.Table
@@ -64,26 +66,23 @@ parseMetadataBlock globals vt entries = label "METADATA_BLOCK" $ do
   -- Fold across all the entries
   pm <- foldM (\pm -> parseMetadataEntry vt (pm ^. pmEntries) pm) pm0 entries
 
-  let pmentries = pm ^. pmEntries
-
   -- In the 'Writer Text/State (Map k v)' monad
-  let ((vte', mtn', pga', pne'), log) =
+  let ((vte', pga', pne'), log) =
         fst . runState Map.empty . runWriterT $ do
 
           -- Resolve references in the 'MetadataTable'
-          vte' <- resolveAll' (valueEntries $ pmentries ^. mtEntries)
-          mtn' <- resolveAll  (pmentries ^. mtNodes)
+          vte' <- resolveAll' (valueEntries $ pm ^. pmEntries . mtEntries)
 
           -- Resolve other references in the partial metadata
           pga' <- resolveAll  (pm ^. pmGlobalAttachments)
           pne' <- resolveAll  (pm ^. pmNamedEntries)
 
-          pure (vte', mtn', pga', pne')
+          pure (vte', pga', pne')
 
-  case (vte', mtn', pga', pne') of
-    (Right vte, Right mtn, Right pga, Right pne) ->
+  case (vte', pga', pne') of
+    (Right vte, Right pga, Right pne) ->
       -- Merge the updated references
-      let vt = pmentries ^. mtEntries
+      let vt = pm ^. pmEntries . mtEntries
           vt' :: ValueTable
           vt' = ValueTable { valueNextId   = valueNextId vt
                            , valueEntries  = vte
@@ -93,8 +92,8 @@ parseMetadataBlock globals vt entries = label "METADATA_BLOCK" $ do
 
           mt' :: MetadataTableM Id
           mt' = MetadataTable { _mtEntries  = pure <$> vt'
-                              , _mtNodes    = pure <$> mtn
-                              , _mtNextNode = pmentries ^. mtNextNode
+                              , _mtNodes    = pm ^. pmEntries . mtNodes
+                              , _mtNextNode = pm ^. pmEntries . mtNextNode
                               }
 
           pm' :: PartialMetadata Id
@@ -107,7 +106,7 @@ parseMetadataBlock globals vt entries = label "METADATA_BLOCK" $ do
                                 }
       in pure $ runId $ (,,,,)
            <$> namedEntries pm'
-           <*> pure   (unnamedEntries pm')
+           <*> unnamedEntries pm'
            <*> pure   (pm' ^. pmInstrAttachments)
            <*> pure   (pm' ^. pmFnAttachments)
            <*> seqMap (pm' ^. pmGlobalAttachments)
@@ -121,7 +120,6 @@ parseMetadataBlock globals vt entries = label "METADATA_BLOCK" $ do
                let foo :: Show a => Either a b -> [String]
                    foo = either ((:[]) . show) (const [])
                in [ foo vte'
-                  , foo mtn'
                   , foo pga'
                   , foo pne'
                   ]

@@ -41,6 +41,7 @@ Library
                        Data.LLVM.BitCode.IR.Globals,
                        Data.LLVM.BitCode.IR.Metadata,
                        Data.LLVM.BitCode.IR.Metadata.Applicative,
+                       Data.LLVM.BitCode.IR.Metadata.Finalize,
                        Data.LLVM.BitCode.IR.Metadata.Parse,
                        Data.LLVM.BitCode.IR.Metadata.Table,
                        Data.LLVM.BitCode.IR.Metadata.Resolve,

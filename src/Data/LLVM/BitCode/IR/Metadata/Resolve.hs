@@ -11,17 +11,21 @@ License     : BSD-3
 Maintainer  : atomb@galois.com
 Stability   : experimental
 
-TODO: This module could have better debugging support.
-'resolveSome' and 'resolveAll' could be in 'Writer' monads which record progress
-in the resolution process.
+
+We pass in an "effectful lookup function" ('lookupStateExcept') that simply looks
+to see if the request is already "cached" in the @Map@ which is the state. If
+not, it raises an exception, short-circuiting the evaluation of that reference.
+(The raised exception is the key of the referenced node.)
+
+When are things added to the state? If a node that has no forward references
+is passed the lookup function, it will never call it. We then add that
+finalized node to the state table (see 'resolveAll'').
 -}
 
 module Data.LLVM.BitCode.IR.Metadata.Resolve where
 
 import qualified Data.Text as Text
 import           Data.Text (Text)
-import           Control.Arrow ((>>>))
-import           Lens.Micro hiding (ix)
 import           Data.Functor.Compose (getCompose)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
@@ -29,79 +33,11 @@ import           Data.Map (Map)
 import           MonadLib
 import           MonadLib.Monads
 
-import           Data.LLVM.BitCode.Parse
-import           Text.LLVM.AST
-import           Text.LLVM.Labels (relabel)
-
 import           Data.LLVM.BitCode.IR.Metadata.Lookup
-import           Data.LLVM.BitCode.IR.Metadata.Table
-
-import           Debug.Trace
-
--- ** Finalizing names
-
-data PartialUnnamedMd = PartialUnnamedMd
-  { pumIndex    :: Int
-  , pumValues   :: PValMd
-  , pumDistinct :: Bool
-  } deriving (Show)
-
-finalizePartialUnnamedMd :: PartialUnnamedMd -> Parse UnnamedMd
-finalizePartialUnnamedMd pum = mkUnnamedMd `fmap` finalizePValMd (pumValues pum)
-  where
-  mkUnnamedMd v = UnnamedMd
-
-  -- Take the results that were resolved and add them to the state.
-    { umIndex  = pumIndex pum
-    , umValues = v
-    , umDistinct = pumDistinct pum
-    }
-
-finalizePValMd :: PValMd -> Parse ValMd
-finalizePValMd = relabel (const requireBbEntryName)
-
-namedEntries :: Applicative m => PartialMetadata m -> m [NamedMd]
-namedEntries =
-  (^. pmNamedEntries)                       -- Map String (m [Int])
-  >>> Map.toList                            -- [(String, m [Int])]
-  >>> traverse (\(s, i) -> NamedMd s <$> i) -- m [NamedMd]
-
--- | Partition unnamed entries into global and function local unnamed entries.
-unnamedEntries :: PartialMetadata Id -> ([PartialUnnamedMd],[PartialUnnamedMd])
-unnamedEntries pm = foldl resolveNode ([],[]) $ Map.toList (runId <$> mt ^. mtNodes)
-  where
-  mt = pm ^. pmEntries
-
-  resolveNode (gs,fs) (ref,(fnLocal,d,ix)) = case lookupNode ref d ix of
-    Just pum | fnLocal   -> (gs,pum:fs)
-             | otherwise -> (pum:gs,fs)
-
-    -- TODO: is this silently eating errors with metadata that's not in the
-    -- value table?
-    Nothing              -> (gs,fs)
-
-  lookupNode ref d ix = do
-    Typed { typedValue = ValMd v } <- lookupValueTableAbs ref (runId <$> mt ^. mtEntries )
-    return PartialUnnamedMd
-      { pumIndex  = ix
-      , pumValues = v
-      , pumDistinct = d
-      }
 
 -- ** Resolve
 
--- We pass in a "monadic lookup function" (lookupStateExcept) that simply looks
--- to see if the request is already "cached" in the @Map@ which is the state. If
--- not, it raises an exception, short-circuiting the evaluation of that
--- reference.
---
--- When are things added to the state? If a node that has no forward references
--- is passed the lookup function, it will never call it. We then add that
--- finalized node to the state table (see resolveAll').
---
--- The raised exception is the key of the referenced node.
-
-tell :: forall m. (WriterM m [Text]) => [Text] -> m()
+tell :: forall m. (WriterM m [Text]) => [Text] -> m ()
 tell = put . (:[]) . Text.unlines
 
 -- | Lookup a key from the state, raising an exception if it's not found
@@ -239,7 +175,6 @@ resolveAll :: forall m k v k' v'. ( Show k           -- Logging
            => Map k' (Lookup (SEW k v) k v v')
            -> m (Either [(k', k)] (Map k' v'))
 resolveAll mp = do
-  put ["resolveAll"]
   (lefts, rights) <- Map.mapEither id <$> resolveSome mp
   pure $ if   not (Map.null lefts)
          then Left (Map.toList lefts)

@@ -27,8 +27,6 @@ import           Lens.Micro.TH
 import qualified Control.Exception as X
 import qualified Data.Map as Map
 
-import           Debug.Trace
-
 import           Data.LLVM.BitCode.IR.Metadata.Applicative
 import           Data.LLVM.BitCode.IR.Metadata.Lookup
 
@@ -36,22 +34,22 @@ import           Data.LLVM.BitCode.IR.Metadata.Lookup
 -- ** MetadataTable
 
 -- | A metadata table where the mapped values are computed in the monad m.
-data MetadataTable' a b = MetadataTable
+data MetadataTable' a = MetadataTable
   { _mtEntries   :: MdTable' a
   , _mtNextNode  :: !Int
-  , _mtNodes     :: Map.Map Int b
+  , _mtNodes     :: Map.Map Int (Bool, Bool, Int)
                    -- ^ The entries in the map are: is the entry function local,
                    -- is the entry distinct, and the implicit id for the node.
   }
 
 makeLenses ''MetadataTable'
 
-type MetadataTable    = MetadataTable' (Typed PValue) (Bool, Bool, Int)
-type MetadataTableM m = MetadataTable' (m (Typed PValue)) (m (Bool, Bool, Int))
+type MetadataTable    = MetadataTable' (Typed PValue)
+type MetadataTableM m = MetadataTable' (m (Typed PValue))
 
 emptyMetadataTable' :: Int -- ^ globals seen so far
                     -> MdTable' a
-                    -> MetadataTable' a b
+                    -> MetadataTable' a
 emptyMetadataTable' globals es = MetadataTable
   { _mtEntries   = es
   , _mtNextNode  = globals
@@ -87,20 +85,11 @@ addStrings :: Applicative m
            -> MetadataTableM m
 addStrings strs mt = foldl (flip addString) mt strs
 
-nameNodeA :: Applicative m
-          => m Bool -- ^ Is the node function-local?
-          -> m Bool -- ^ Is the node "distinct"?
-          -> Int    -- ^ Index to insert at
-          -> MetadataTableM m
-          -> MetadataTableM m
-nameNodeA fnLocal isDistinct ix mt =
-  mt & mtNextNode %~ (+1) -- Increment node count
-     & mtNodes    %~ Map.insert ix (tupleA3 (fnLocal, isDistinct, pure $ mt ^. mtNextNode))
-
--- | See 'nameNodeA'.
 nameNode :: Applicative m
          => Bool -> Bool -> Int -> MetadataTableM m -> MetadataTableM m
-nameNode fnLocal isDistinct = nameNodeA (pure fnLocal) (pure isDistinct)
+nameNode fnLocal isDistinct ix mt =
+  mt & mtNextNode %~ (+1) -- Increment node count
+     & mtNodes    %~ Map.insert ix (fnLocal, isDistinct, mt ^. mtNextNode)
 
 -- | Given an applicative value and a function converting it into a PValMd,
 -- add it to the metadata table and increment the name indices
@@ -139,7 +128,7 @@ mdForwardRef :: (Applicative f)
              -> LookupMd f PValMd
 mdForwardRef mt ix =
   case Map.lookup ix (mt ^. mtNodes) of
-    Just x  -> thd <$> x
+    Just x  -> pure $ thd x
     Nothing ->
       withLookup ix $
         \case
@@ -161,10 +150,10 @@ mdForwardRefOrNull' :: (Applicative f)
                     -> LookupMd f (Maybe PValMd)
 mdForwardRefOrNull' mt = commuteMaybe . mdForwardRefOrNull mt
 
-mdNodeRef :: Functor f => [String] -> MetadataTableM f -> Int -> f Int
+mdNodeRef :: Applicative f => [String] -> MetadataTableM f -> Int -> f Int
 mdNodeRef cxt mt ix =
   case Map.lookup ix (mt ^. mtNodes) of
-    Just x  -> fmap thd x
+    Just x  -> pure $ thd x
     Nothing -> X.throw (BadValueRef cxt ix) -- TODO: better error messages
   where thd (_, _, z) = z
 
