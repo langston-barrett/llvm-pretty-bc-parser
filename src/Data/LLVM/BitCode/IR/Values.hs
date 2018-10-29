@@ -76,7 +76,7 @@ getFnValueById' mbVt ty n = label "getFnValueById'" $ case ty of
   PrimType Metadata -> do
     cxt <- getContext
     md  <- getMdTable
-    return (forwardRef cxt n md)
+    return (Typed (PrimType Metadata) . ValMd $ forwardRef cxt n md)
 
   _ -> do
     mb <- lookupValueAbs n

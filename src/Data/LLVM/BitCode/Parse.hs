@@ -336,7 +336,7 @@ lookupValue n = lookupValueTable n `fmap` getValueTable
 -- | Lookup lazily, hiding an error in the result if the entry doesn't exist by
 -- the time it's needed.  NOTE: This always looks up an absolute index, never a
 -- relative one.
-forwardRef :: [String] -> Int -> ValueTable -> Typed PValue
+forwardRef :: [String] -> Int -> ValueTable' a -> a
 forwardRef cxt n vt =
   fromMaybe (X.throw (BadValueRef cxt n)) (lookupValueTableAbs n vt)
 

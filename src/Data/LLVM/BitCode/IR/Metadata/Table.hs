@@ -198,15 +198,15 @@ mkMdRefTable mt = Map.mapMaybe step (mt ^. mtNodes)
 type PKindMd               = Int
 type InstrMdAttachments    = Map.Map Int [(KindMd,PValMd)]
 type PFnMdAttachments      = Map.Map PKindMd PValMd
-type PGlobalAttachments' v = Map.Map Symbol v
+type PGlobalAttachments' f = Map.Map Symbol (Map.Map KindMd (f PValMd))
 type PGlobalAttachments    = Map.Map Symbol (Map.Map KindMd PValMd)
 
 -- | The fields wrapped in a @m@ are the ones that use forward references while
 -- they're being parsed.
-data PartialMetadata m = PartialMetadata
-  { _pmEntries          :: MetadataTable'       m
-  , _pmNamedEntries     :: Map.Map String      (m [Int])
-  , _pmGlobalAttachments:: PGlobalAttachments' (m (Map.Map KindMd PValMd))
+data PartialMetadata f = PartialMetadata
+  { _pmEntries          :: MetadataTable'      f
+  , _pmNamedEntries     :: Map.Map String      [f Int]
+  , _pmGlobalAttachments:: PGlobalAttachments' f
   , _pmNextName         :: Maybe String
   , _pmInstrAttachments :: InstrMdAttachments
   , _pmFnAttachments    :: PFnMdAttachments
@@ -227,11 +227,11 @@ emptyPartialMetadata globals es = PartialMetadata
   , _pmGlobalAttachments = Map.empty
   }
 
-addGlobalAttachmentsA :: Applicative m
+addGlobalAttachmentsA :: Applicative f
                       => Symbol                    -- ^ name of the global to attach to
-                      -> m (Map.Map KindMd PValMd) -- ^ metadata references to attach
-                      -> PartialMetadata m
-                      -> PartialMetadata m
+                      -> Map.Map KindMd (f PValMd) -- ^ metadata references to attach
+                      -> PartialMetadata f
+                      -> PartialMetadata f
 addGlobalAttachmentsA sym mds pm =
   pm & pmGlobalAttachments %~ Map.insert sym mds
 
@@ -246,8 +246,8 @@ addInstrAttachment :: Int -> [(KindMd,PValMd)]
                    -> PartialMetadata m -> PartialMetadata m
 addInstrAttachment instr md = pmInstrAttachments %~ Map.insert instr md
 
-nameMetadataA :: Applicative m
-              => m [Int] -> PartialMetadata m -> Parse (PartialMetadata m)
+nameMetadataA :: Applicative f
+              => [f Int] -> PartialMetadata f -> Parse (PartialMetadata f)
 nameMetadataA val pm = case pm ^. pmNextName  of
   Just name ->
     return $! pm & pmNextName     .~ Nothing

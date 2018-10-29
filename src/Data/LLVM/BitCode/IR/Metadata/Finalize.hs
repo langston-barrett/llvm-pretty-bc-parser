@@ -51,11 +51,12 @@ finalizePartialUnnamedMd pum = mkUnnamedMd `fmap` finalizePValMd (pumValues pum)
 finalizePValMd :: PValMd -> Parse ValMd
 finalizePValMd = relabel (const requireBbEntryName)
 
-namedEntries :: Applicative f => PartialMetadata f -> f [NamedMd]
+namedEntries :: Applicative f => PartialMetadata f -> [f NamedMd]
 namedEntries =
-  (^. pmNamedEntries)                       -- Map String (m [Int])
+  (^. pmNamedEntries)                       -- Map String [f Int]
+  >>> Map.map sequenceA                     -- Map String (f [Int])
   >>> Map.toList                            -- [(String, f [Int])]
-  >>> traverse (\(s, i) -> NamedMd s <$> i) -- f [NamedMd]
+  >>> map (\(s, i) -> NamedMd s <$> i)      -- [f NamedMd]
 
 -- | Partition unnamed entries into global and function local unnamed entries.
 unnamedEntries :: forall f. (Applicative f)

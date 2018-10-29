@@ -123,7 +123,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
   10 -> label "METADATA_NAMED_NODE" $ do
     mdIds <- parseFields r 0 numeric
     cxt   <- getContext
-    nameMetadataA (traverse (mdNodeRef cxt mt) mdIds) pm
+    nameMetadataA (map (mdNodeRef cxt mt) mdIds) pm
 
   -- [m x [value, [n x [id, mdnode]]]
   11 -> label "METADATA_ATTACHMENT" $ do
@@ -595,17 +595,17 @@ parseAttachment r l = loop (length (recordFields r) - 1) []
 parseGlobalObjectAttachment :: Applicative f
                             => MetadataTable' (LookupMd f)
                             -> Record
-                            -> Parse ((LookupMd f) (Map KindMd PValMd))
+                            -> Parse (Map KindMd (LookupMd f PValMd))
 parseGlobalObjectAttachment mt r = label "parseGlobalObjectAttachment" $
   do cxt <- getContext
-     go cxt (pure Map.empty) 1
+     go cxt Map.empty 1
   where
   len = length (recordFields r)
 
-  go cxt acc n | n < len =
-    do kind <- getKind =<< parseField r n numeric
-       i    <- parseField r (n + 1) numeric
-       go cxt (Map.insert kind <$> mdForwardRef mt i <*> acc) (n + 2)
+  go cxt acc n | n < len = do
+    kind <- getKind =<< parseField r n numeric
+    i    <- parseField r (n + 1) numeric
+    go cxt (Map.insert kind (mdForwardRef mt i) acc) (n + 2)
 
   go _ acc _ = pure acc
 
@@ -646,7 +646,7 @@ parseMetadataOldNode fnLocal vt mt r pm = do
         val <- case ty of
           PrimType Metadata ->
             let ref = mdForwardRef mt valId
-            in pure $! Typed (PrimType Metadata) <$> (ValMd <$> ref)
+            in pure $! Typed (PrimType Metadata) . ValMd <$> ref
           _ -> pure $! (pure $! forwardRef cxt valId vt) -- XXX need to check for a void type
 
         vals <- loop rest
