@@ -32,3 +32,9 @@ withLookup :: (Functor f)
            -> (v -> a) -- ^ Function of the result
            -> Lookup f i v a
 withLookup i cont = Compose $ fmap cont . ($i) <$> ask
+
+
+lookup :: (Functor f)
+       => i        -- ^ Index to resolve
+       -> Lookup f i v v
+lookup = flip withLookup id

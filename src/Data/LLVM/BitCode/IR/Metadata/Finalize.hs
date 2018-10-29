@@ -27,7 +27,6 @@ import           Data.LLVM.BitCode.Parse
 import           Text.LLVM.AST
 import           Text.LLVM.Labels (relabel)
 
-import           Data.LLVM.BitCode.IR.Metadata.Applicative (seqMap)
 import           Data.LLVM.BitCode.IR.Metadata.Table
 
 -- ** Finalizing names
@@ -61,30 +60,25 @@ namedEntries =
 -- | Partition unnamed entries into global and function local unnamed entries.
 unnamedEntries :: forall f. (Applicative f)
                => PartialMetadata f
-               -> f ([PartialUnnamedMd], [PartialUnnamedMd])
+               -> ([f PartialUnnamedMd], [f PartialUnnamedMd])
 unnamedEntries pm =
-  (\entries -> partitionEithers . mapMaybe (resolveNode entries) . Map.toList)
-  <$> seqMap (valueEntries $ pm ^. pmEntries . mtEntries)
-  <*> pure (pm ^. pmEntries . mtNodes)
+  partitionEithers . mapMaybe (resolveNode (valueEntries $ pm ^. pmEntries . mtEntries)) $
+    Map.toList $ pm ^. pmEntries . mtNodes
   where
     -- TODO: is this silently eating errors with metadata that's not in the
     -- value table (by passing along the 'Nothing' from the Map lookup)?
-    --
-    -- NB: the bind (=<<) happens in 'Maybe'.
-    resolveNode :: Map Int (Typed PValue)   -- ^ mtEntries
-                -> (Int, (Bool, Bool, Int)) -- ^ mtNodes
-                -> Maybe (Either PartialUnnamedMd PartialUnnamedMd)
+    resolveNode :: Map Int (f PValMd)           -- ^ mtEntries
+                -> (Int, (Bool, Bool, Int))     -- ^ mtNodes
+                -> Maybe (Either (f PartialUnnamedMd) (f PartialUnnamedMd))
     resolveNode entries (ref, (fnLocal, isDistinct, ix)) =
-      (if fnLocal then Left else Right) <$>
-        (mkPartialUnnamedMd ix isDistinct =<< Map.lookup ref entries)
+      flip fmap (Map.lookup ref entries) $ \val ->
+        (if fnLocal then Left else Right)
+          (mkPartialUnnamedMd ix isDistinct <$> val)
 
-    mkPartialUnnamedMd :: Int -> Bool -> Typed PValue -> Maybe PartialUnnamedMd
-    mkPartialUnnamedMd ix d =
-      \case
-        Typed{ typedValue = ValMd v } ->
-          Just PartialUnnamedMd
-            { pumIndex    = ix
-            , pumValues   = v
-            , pumDistinct = d
-            }
-        _ -> Nothing
+    mkPartialUnnamedMd :: Int -> Bool -> PValMd -> PartialUnnamedMd
+    mkPartialUnnamedMd ix d v =
+      PartialUnnamedMd
+        { pumIndex    = ix
+        , pumValues   = v
+        , pumDistinct = d
+        }

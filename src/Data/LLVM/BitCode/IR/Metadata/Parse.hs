@@ -50,7 +50,7 @@ import           Data.LLVM.BitCode.IR.Metadata.Table
 -- to not have to rely on it.
 parseMetadataEntry :: forall f. Applicative f
                    => ValueTable
-                   -> MetadataTableM  (LookupMd f)
+                   -> MetadataTable'  (LookupMd f)
                    -- ^ TODO: Should this be refactored out?
                    -> PartialMetadata (LookupMd f)
                    -> Entry
@@ -587,13 +587,13 @@ parseAttachment r l = loop (length (recordFields r) - 1) []
              | otherwise = do
     kind <- parseField r (n - 1) numeric
     md   <- getMetadata =<< parseField r n numeric
-    loop (n - 2) ((kind,typedValue md) : acc)
+    loop (n - 2) ((kind, md) : acc)
 
 
 -- | This is a named version of the metadata list that can show up at the end of
 -- a global declaration. It will be of the form @!dbg !2 [!dbg !n, ...]@.
 parseGlobalObjectAttachment :: Applicative f
-                            => MetadataTableM (LookupMd f)
+                            => MetadataTable' (LookupMd f)
                             -> Record
                             -> Parse ((LookupMd f) (Map KindMd PValMd))
 parseGlobalObjectAttachment mt r = label "parseGlobalObjectAttachment" $
@@ -613,7 +613,7 @@ parseGlobalObjectAttachment mt r = label "parseGlobalObjectAttachment" $
 -- | Parse a metadata node.
 parseMetadataNode :: Applicative f
                   => Bool
-                  -> MetadataTableM (LookupMd f)
+                  -> MetadataTable' (LookupMd f)
                   -> Record
                   -> PartialMetadata (LookupMd f)
                   -> Parse (PartialMetadata (LookupMd f))
@@ -628,7 +628,7 @@ parseMetadataNode isDistinct mt r pm = do
 parseMetadataOldNode :: forall f. Applicative f
                      => Bool
                      -> ValueTable
-                     -> MetadataTableM (LookupMd f)
+                     -> MetadataTable' (LookupMd f)
                      -> Record
                      -> PartialMetadata (LookupMd f)
                      -> Parse (PartialMetadata (LookupMd f))

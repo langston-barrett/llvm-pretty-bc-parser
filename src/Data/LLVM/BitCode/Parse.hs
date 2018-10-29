@@ -84,7 +84,7 @@ data ParseState = ParseState
   , psTypeTableSize :: !Int
   , psValueTable    :: ValueTable
   , psStringTable   :: Maybe StringTable
-  , psMdTable       :: ValueTable
+  , psMdTable       :: ValueTable' PValMd
   , psMdRefs        :: MdRefTable
   , psFunProtos     :: Seq.Seq FunProto
   , psNextResultId  :: !Int
@@ -133,9 +133,7 @@ setRelIds b = Parse $ do
   set $! ps { psValueTable = (psValueTable ps) { valueRelIds = b }}
 
 getRelIds :: Parse Bool
-getRelIds  = Parse $ do
-  ps <- get
-  return (valueRelIds (psValueTable ps))
+getRelIds  = Parse $ valueRelIds . psValueTable <$> get
 
 getLastLoc :: Parse PDebugLoc
 getLastLoc  = Parse $ do
@@ -150,8 +148,7 @@ setModVersion v = Parse $ do
   set $! ps { psModVersion = v }
 
 getModVersion :: Parse Int
-getModVersion = Parse $ do
-  psModVersion <$> get
+getModVersion = Parse $ psModVersion <$> get
 
 -- | Sort of a hack to preserve state between function body parses.  It would
 -- really be nice to separate this into a different monad, that could just run
@@ -260,6 +257,9 @@ type PValue = Value' Int
 type PInstr = Instr' Int
 
 -- | A value table with entries in the type @a@
+--
+-- This is parameterized over @a@ because metadata parsing stores
+-- @PValMd@s, rather than @Typed PValue@s.
 data ValueTable' a = ValueTable
   { valueNextId   :: !Int
   , valueEntries  :: Map.Map Int a
@@ -269,7 +269,7 @@ data ValueTable' a = ValueTable
 
 type ValueTable = ValueTable' (Typed PValue)
 
-emptyValueTable :: Bool -> ValueTable
+emptyValueTable :: Bool -> ValueTable' a
 emptyValueTable rel = ValueTable
   { valueNextId  = 0
   , valueEntries = Map.empty
@@ -380,8 +380,8 @@ fixValueTable_ k = fixValueTable $ \ vt -> do
 
 type PValMd = ValMd' Int
 
-type MdTable' a = ValueTable' a
-type MdTable    = MdTable' (Typed PValue)
+type MdTable    = ValueTable' PValMd
+type MdTable' f = ValueTable' (f PValMd)
 
 getMdTable :: Parse MdTable
 getMdTable  = Parse (psMdTable <$> get)
@@ -391,19 +391,17 @@ setMdTable md = Parse $ do
   ps <- get
   set $! ps { psMdTable = md }
 
-getMetadata :: Int -> Parse (Typed PValMd)
+getMetadata :: Int -> Parse PValMd
 getMetadata ix = do
   ps <- Parse get
   case resolveMd ix ps of
-    Just tv -> case typedValue tv of
-      ValMd val -> return tv { typedValue = val }
-      _         -> fail "unexpected non-metadata value in metadata table"
+    Just tv -> pure tv
     Nothing -> fail ("metadata index " ++ show ix ++ " is not defined")
 
-resolveMd :: Int -> ParseState -> Maybe (Typed PValue)
+resolveMd :: Int -> ParseState -> Maybe PValMd
 resolveMd ix ps = nodeRef `mplus` mdValue
   where
-  reference = Typed (PrimType Metadata) . ValMd . ValMdRef
+  reference = ValMdRef
   nodeRef   = reference `fmap` Map.lookup ix (psMdRefs ps)
   mdValue   = lookupValueTableAbs ix (psMdTable ps)
 
