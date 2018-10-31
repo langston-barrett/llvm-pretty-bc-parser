@@ -24,8 +24,7 @@ import           Text.LLVM.AST
 
 import           MonadLib (Id)
 import           Control.Monad (guard)
-import           Lens.Micro hiding (ix)
-import           Lens.Micro.TH
+import           Control.Lens hiding (ix)
 import qualified Control.Exception as X
 import qualified Data.Map as Map
 
@@ -198,7 +197,7 @@ mkMdRefTable mt = Map.mapMaybe step (mt ^. mtNodes)
 type PKindMd               = Int
 type InstrMdAttachments    = Map.Map Int [(KindMd,PValMd)]
 type PFnMdAttachments      = Map.Map PKindMd PValMd
-type PGlobalAttachments' f = Map.Map Symbol (Map.Map KindMd (f PValMd))
+type PGlobalAttachmentsF f = Map.Map Symbol (Map.Map KindMd (f PValMd))
 type PGlobalAttachments    = Map.Map Symbol (Map.Map KindMd PValMd)
 
 -- | The fields wrapped in a @m@ are the ones that use forward references while
@@ -206,7 +205,7 @@ type PGlobalAttachments    = Map.Map Symbol (Map.Map KindMd PValMd)
 data PartialMetadata f = PartialMetadata
   { _pmEntries          :: MetadataTable'      f
   , _pmNamedEntries     :: Map.Map String      [f Int]
-  , _pmGlobalAttachments:: PGlobalAttachments' f
+  , _pmGlobalAttachments:: PGlobalAttachmentsF f
   , _pmNextName         :: Maybe String
   , _pmInstrAttachments :: InstrMdAttachments
   , _pmFnAttachments    :: PFnMdAttachments

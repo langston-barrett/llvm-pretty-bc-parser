@@ -29,7 +29,7 @@ import           Text.LLVM.AST
 
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
 import           Control.Monad (mplus, unless, when)
-import           Lens.Micro hiding (ix)
+import           Control.Lens hiding (ix)
 import           Data.List (mapAccumL)
 import           Data.Bits (shiftR, testBit, shiftL)
 import           Data.Word (Word32,Word64)

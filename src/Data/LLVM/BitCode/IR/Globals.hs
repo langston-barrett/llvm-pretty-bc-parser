@@ -1,39 +1,46 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Data.LLVM.BitCode.IR.Globals where
 
-import Data.LLVM.BitCode.IR.Attrs
-import Data.LLVM.BitCode.IR.Values
-import Data.LLVM.BitCode.Record
-import Data.LLVM.BitCode.Parse
-import Text.LLVM.AST
-import Text.LLVM.Labels
+import           Data.LLVM.BitCode.IR.Attrs
+import           Data.LLVM.BitCode.IR.Values
+import           Data.LLVM.BitCode.Record
+import           Data.LLVM.BitCode.Parse
+import           Text.LLVM.AST
+import           Text.LLVM.Labels
 
-import Control.Monad (guard,mplus)
-import Data.Bits (bit,shiftR,testBit)
+import           Control.Lens hiding (ix)
+import           Control.Monad (guard,mplus)
+import           Data.Bits (bit,shiftR,testBit)
 import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
-import Data.Word (Word32)
+import           Data.Word (Word32)
 
 
 -- Global Variables ------------------------------------------------------------
 
-type GlobalList = Seq.Seq PartialGlobal
-
-data PartialGlobal = PartialGlobal
+data PartialGlobal' a = PartialGlobal
   { pgSym     :: Symbol
   , pgAttrs   :: GlobalAttrs
   , pgType    :: Type
   , pgValueIx :: Maybe Int
   , pgAlign   :: Maybe Align
-  , pgMd      :: Map.Map KindMd PValMd
-  } deriving Show
+  , _pgMd     :: Map.Map KindMd a
+  }
+
+makeLenses ''PartialGlobal'
+
+type PartialGlobal = PartialGlobal' PValMd
+
+type GlobalListF f = Seq.Seq (PartialGlobal' (f PValMd))
+type GlobalList    = Seq.Seq PartialGlobal
 
 -- [ pointer type, isconst, initid
 -- , linkage, alignment, section, visibility, threadlocal
 -- , unnamed_addr
 -- ]
-parseGlobalVar :: Int -> Record -> Parse PartialGlobal
+parseGlobalVar :: Int -> Record -> Parse (PartialGlobal' a)
 parseGlobalVar n r = label "GLOBALVAR" $ do
   (name, offset) <- oldOrStrtabName n r
   let field i = parseField r (i + offset)
@@ -45,15 +52,15 @@ parseGlobalVar n r = label "GLOBALVAR" $ do
   link    <-             field 3 linkage
 
   mbAlign <- if length (recordFields r) > (4 + offset)
-                then Just `fmap` field 4 numeric
-                else return Nothing
-  vis <- if length (recordFields r) > (6 + offset) && not (link `elem` [Internal, Private])
-                then field 6 visibility
-                else pure DefaultVisibility
+             then Just `fmap` field 4 numeric
+             else return Nothing
+  vis <- if length (recordFields r) > (6 + offset) && link `notElem` [Internal, Private]
+         then field 6 visibility
+         else pure DefaultVisibility
 
   ty <- if explicitTy
-           then return ptrty
-           else elimPtrTo ptrty `mplus` (fail $ "Invalid type for value: " ++ show ptrty)
+        then return ptrty
+        else elimPtrTo ptrty `mplus` (fail $ "Invalid type for value: " ++ show ptrty)
 
   _       <- pushValue (Typed (PtrTo ty) (ValSymbol name))
   let valid | initid == 0 = Nothing
@@ -74,7 +81,7 @@ parseGlobalVar n r = label "GLOBALVAR" $ do
         let aval = bit b `shiftR` 1
         guard (aval > 0)
         return aval
-    , pgMd      = Map.empty
+    , _pgMd     = Map.empty
     }
 
 finalizeGlobal :: PartialGlobal -> Parse Global
@@ -86,7 +93,7 @@ finalizeGlobal pg = case pgValueIx pg of
     mkGlobal (Just val)
   where
   mkGlobal mval =
-    do md <- mapM (relabel (const requireBbEntryName)) (pgMd pg)
+    do md <- mapM (relabel (const requireBbEntryName)) (_pgMd pg)
        return Global { globalSym   = pgSym pg
                      , globalAttrs = pgAttrs pg
                      , globalType  = pgType pg
@@ -99,4 +106,4 @@ finalizeGlobal pg = case pgValueIx pg of
 setGlobalMetadataAttachment ::
   Map.Map KindMd PValMd ->
   (PartialGlobal -> PartialGlobal)
-setGlobalMetadataAttachment pmd pg = pg { pgMd = pmd }
+setGlobalMetadataAttachment pmd pg = pg & pgMd .~ pmd

@@ -1,51 +1,66 @@
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Data.LLVM.BitCode.IR.Module where
 
-import Data.LLVM.BitCode.Bitstream
-import Data.LLVM.BitCode.IR.Attrs
-import Data.LLVM.BitCode.IR.Blocks
-import Data.LLVM.BitCode.IR.Constants
-import Data.LLVM.BitCode.IR.Function
-import Data.LLVM.BitCode.IR.Globals
-import Data.LLVM.BitCode.IR.Metadata
-import Data.LLVM.BitCode.IR.Types
-import Data.LLVM.BitCode.IR.Values
-import Data.LLVM.BitCode.Match
-import Data.LLVM.BitCode.Parse
-import Data.LLVM.BitCode.Record
-import Text.LLVM.AST
+import           Data.LLVM.BitCode.Bitstream
+import           Data.LLVM.BitCode.IR.Attrs
+import           Data.LLVM.BitCode.IR.Blocks
+import           Data.LLVM.BitCode.IR.Constants
+import           Data.LLVM.BitCode.IR.Function
+import           Data.LLVM.BitCode.IR.Globals
+import           Data.LLVM.BitCode.IR.Metadata
+import           Data.LLVM.BitCode.IR.Metadata.Resolve
+import           Data.LLVM.BitCode.IR.Types
+import           Data.LLVM.BitCode.IR.Values
+import           Data.LLVM.BitCode.Match
+import           Data.LLVM.BitCode.Parse
+import           Data.LLVM.BitCode.Record
+import           Text.LLVM.AST
 
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
-import Control.Monad (foldM,guard,when,forM_)
-import Data.List (sortBy)
-import Data.Ord (comparing)
+import           Control.Lens
+import           Control.Monad (foldM,guard,when,forM_)
+import           Control.Monad.Fail (MonadFail)
+import           Data.Bifunctor
 import qualified Data.Foldable as F
+import           Data.Functor.Compose
+import           Data.List (sortBy)
+import           Data.Map (Map)
 import qualified Data.Map as Map
+import           Data.Ord (comparing)
+import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
+import           Data.Sequence.Lens
+import qualified Data.Text as Text
 import qualified Data.Traversable as T
+import           Data.Validation
+import           Data.Validation (Validation(..), validation)
+import           MonadLib (Id, runId)
+import           MonadLib.Monads (runState, runWriterT)
 
 
 -- Module Block Parsing --------------------------------------------------------
 
-data PartialModule = PartialModule
+data PartialModule f = PartialModule
   { partialGlobalIx   :: !Int
-  , partialGlobals    :: GlobalList
-  , partialDefines    :: DefineList
+  , partialGlobals    :: GlobalListF f
+  , partialDefines    :: DefineListF f
   , partialDeclares   :: DeclareList
   , partialDataLayout :: DataLayout
   , partialInlineAsm  :: InlineAsm
-  , partialComdat     :: Seq.Seq (String,SelectionKind)
+  , partialComdat     :: Seq (String,SelectionKind)
   , partialAliasIx    :: !Int
   , partialAliases    :: AliasList
-  , partialNamedMd    :: [NamedMd]
-  , partialUnnamedMd  :: [PartialUnnamedMd]
-  , partialSections   :: Seq.Seq String
+  , partialNamedMd    :: [f NamedMd]
+  , partialUnnamedMd  :: [PartialUnnamedMdF f]
+  , partialSections   :: Seq String
   , partialSourceName :: !(Maybe String)
   }
 
-emptyPartialModule :: PartialModule
+emptyPartialModule :: PartialModule f
 emptyPartialModule  = PartialModule
   { partialGlobalIx   = 0
   , partialGlobals    = mempty
@@ -62,29 +77,118 @@ emptyPartialModule  = PartialModule
   , partialComdat     = mempty
   }
 
--- | Fixup the global variables and declarations, and return the completed
--- module.
-finalizeModule :: PartialModule -> Parse Module
+
+-- | Fixup the global variables and declarations and resolve forward
+-- references in metadata, and return the completed module.
+finalizeModule :: PartialModule (LookupMd (SEW Int PValMd))
+               -> Parse Module
 finalizeModule pm = label "finalizeModule" $ do
-  globals  <- T.mapM finalizeGlobal       (partialGlobals pm)
+  (namedMd, unnamedMd, globs, defs) <-
+    finalizeMdRefs
+      (partialUnnamedMd pm)
+      (partialNamedMd pm)
+      (partialGlobals pm)
+      (partialDefines pm)
+  globals  <- T.mapM finalizeGlobal       globs
   declares <- T.mapM finalizeDeclare      (partialDeclares pm)
   aliases  <- T.mapM finalizePartialAlias (partialAliases pm)
-  unnamed  <- T.mapM finalizePartialUnnamedMd (partialUnnamedMd pm)
+  unnamed  <- T.mapM finalizePartialUnnamedMd (unnamedMd)
   types    <- resolveTypeDecls
+  -- TODO: Resolve metadata refs
   let lkp = lookupBlockName (partialDefines pm)
   defines <- T.mapM (finalizePartialDefine lkp) (partialDefines pm)
   return emptyModule
     { modDataLayout = partialDataLayout pm
-    , modNamedMd    = partialNamedMd pm
+    , modNamedMd    = namedMd
     , modUnnamedMd  = sortBy (comparing umIndex) unnamed
     , modGlobals    = F.toList globals
-    , modDefines    = F.toList defines
+    , modDefines    = undefined -- TODO
+      -- F.toList $ fmap runId defs
     , modTypes      = types
     , modDeclares   = F.toList declares
     , modInlineAsm  = partialInlineAsm pm
     , modAliases    = F.toList aliases
     , modComdat     = Map.fromList (F.toList (partialComdat pm))
     }
+
+-- | Finalize metadata, resolving references.
+--
+-- If there are unresolvable refs, this will fail with a comprehensive
+-- message.
+--
+-- This is in this module and not "Data.LLVM.BitCode.IR.Metadata.Resolve"
+-- because awareness of e.g. 'GlobalList'' and 'DefineList' crosses module
+-- boundaries.
+finalizeMdRefs :: (MonadFail m)
+               => [PartialUnnamedMdF (LookupMd (SEW Int PValMd))]
+               -> [LookupMd (SEW Int PValMd) NamedMd]
+               -> GlobalListF (LookupMd (SEW Int PValMd))
+               -> DefineListF (LookupMd (SEW Int PValMd))
+               -> m ( [NamedMd]
+                    , [PartialUnnamedMd]
+                    , GlobalList
+                    , DefineList PValMd
+                    )
+finalizeMdRefs unnamed named globList defList = do
+  -- In the 'Writer Text/State (Map k v)' monad
+  let ((unnamed', named', globList', defList'), log) =
+        fst . runState Map.empty . runWriterT $ do
+          -- Turn the 'PartialUnnamedMd' back into a 'Map'
+          let pumTable :: Map.Map Int (LookupMd (SEW Int PValMd) PValMd)
+              pumTable = Map.fromList $ map (\pum -> (pum ^. pumIndex, pum ^. pumValues )) unnamed
+
+          -- Resolve references, updating the state
+          unnamed''  <- resolveAll pumTable
+
+          -- Resolve references with the current state
+          named''    <- resolveAllList named
+
+          -- The references are buried a little deep here.
+          -- Lenses are a resonable, yet still complex way to do it.
+          let traverseCompose :: (Applicative m, Semigroup w)
+                              => Traversal s s' b b'
+                              -> (b -> m (Validation w b'))
+                              -> s
+                              -> m (Validation w s')
+              traverseCompose l f s = getCompose (l (Compose . f) s)
+
+          -- Replace the semigroup constraint by list-making
+          let traverseCompose' :: (Applicative m)
+                               => Traversal s s' b b'
+                               -> (b -> m (Validation w b'))
+                               -> s
+                               -> m (Validation [w] s')
+              traverseCompose' l f s = traverseCompose l (fmap (first (:[])) . f) s
+
+          globList'' <- traverseCompose (traverse . pgMd) resolveAllMap globList
+          defList''  <-
+            -- tr resolves some metadata reference deep down in the DefineList
+            let tr :: Traversal (DefineListF (LookupMd f)) (DefineListF Id)
+                                (LookupMd f PValMd) (Id PValMd)
+                tr = traverse . partialGlobalMd . traverse -- . pumValues
+            in traverseCompose' tr (fmap (fmap pure) . resolveOne) defList
+
+          pure (unnamed'', named'', globList'', defList'')
+
+  case (unnamed', named', globList', defList') of
+    (Success unnamed'', Success named'', Success globList'', Success defList'') ->
+      _
+    _ -> fail $ unlines $
+            [ "Metadata block contained some unresolvable entries."
+            , "This is usually a result of an internal error."
+            , "Here are the (referencer, referencee) pairs"
+            , "(list may be incomplete):"
+            , concat . concat $
+                let mkErr :: Show a => Validation a c -> [String]
+                    mkErr = validation ((:[]) . show) (const [])
+                in [ mkErr unnamed'
+                   , mkErr named'
+                   , mkErr globList'
+                   , mkErr defList'
+                   ]
+            , "\nAnd here is a log: "
+            ] ++ map Text.unpack log
+    --              alaf Compose l (fmap (first pure) . f) s
 
 -- | Parse an LLVM Module out of the top-level block in a Bitstream.
 parseModuleBlock :: [Entry] -> Parse Module
@@ -113,7 +217,10 @@ parseModuleBlock ents = label "MODULE_BLOCK" $ do
 
 
 -- | Parse the entries in a module block.
-parseModuleBlockEntry :: PartialModule -> Entry -> Parse PartialModule
+parseModuleBlockEntry :: Applicative f
+                      => PartialModule (LookupMd f)
+                      -> Entry
+                      -> Parse (PartialModule (LookupMd f))
 
 parseModuleBlockEntry pm (blockInfoBlockId -> Just _) =
   -- skip the block info block, as we only use it during Bitstream parsing.
@@ -136,9 +243,9 @@ parseModuleBlockEntry pm (moduleCodeFunction -> Just r) = do
 parseModuleBlockEntry pm (functionBlockId -> Just es) = label "FUNCTION_BLOCK_ID" $ do
   let unnamedGlobalsCount = length (partialUnnamedMd pm)
   def <- parseFunctionBlock unnamedGlobalsCount es
-  let def' = def { partialGlobalMd = [] }
-  return pm { partialDefines = partialDefines pm Seq.|> def'
-            , partialUnnamedMd = partialGlobalMd def ++ partialUnnamedMd pm
+  let def' = def { _partialGlobalMd = [] }
+  return pm { partialDefines   = partialDefines pm Seq.|> def'
+            , partialUnnamedMd = _partialGlobalMd def ++ partialUnnamedMd pm
             }
 
 parseModuleBlockEntry pm (paramattrBlockId -> Just _) = do
@@ -154,7 +261,7 @@ parseModuleBlockEntry pm (paramattrGroupBlockId -> Just _) = do
 parseModuleBlockEntry pm (metadataBlockId -> Just es) = label "METADATA_BLOCK_ID" $ do
   vt <- getValueTable
   let globalsSoFar = length (partialUnnamedMd pm)
-  (ns,(gs,_),_,_,atts) <- parseMetadataBlock globalsSoFar vt es
+  (ns, (gs, _), _, _, atts) <- parseMetadataBlock globalsSoFar vt es
   return $ addGlobalAttachments atts pm
     { partialNamedMd   = partialNamedMd   pm ++ ns
     , partialUnnamedMd = partialUnnamedMd pm ++ gs
@@ -226,15 +333,15 @@ parseModuleBlockEntry pm (moduleCodeComdat -> Just r) = do
   v <- getModVersion
   (kindVal, name) <- if | v >= 2 -> do
                             kindVal <- parseField r 0 numeric
-                            name <- UTF8.decode <$> parseFields r 2 char
+                            name    <- UTF8.decode <$> parseFields r 2 char
                             return (kindVal, name)
                         | otherwise -> do
-                            offset <- parseField r 0 numeric
-                            len <- parseField r 1 numeric
+                            offset  <- parseField r 0 numeric
+                            len     <- parseField r 1 numeric
                             kindVal <- parseField r 2 numeric
-                            mst <- getStringTable
+                            mst     <- getStringTable
                             let msg = "No string table for new-style COMDAT."
-                            st <- maybe (fail msg) return mst
+                            st      <- maybe (fail msg) return mst
                             let Symbol name = resolveStrtabSymbol st offset len
                             return (kindVal, name)
   kind <- case kindVal :: Int of
@@ -325,7 +432,7 @@ parseModuleBlockEntry pm (syncScopeNamesBlockId -> Just _) =
 parseModuleBlockEntry _ e =
   fail ("unexpected module block entry: " ++ show e)
 
-parseFunProto :: Record -> PartialModule -> Parse PartialModule
+parseFunProto :: Record -> PartialModule f -> Parse (PartialModule f)
 parseFunProto r pm = label "FUNCTION" $ do
   ix   <- nextValueId
   (name, offset) <- oldOrStrtabName ix r
@@ -367,10 +474,10 @@ parseFunProto r pm = label "FUNCTION" $ do
              -- llvm-dis when linkage is External
              guard (link /= External)
              return link
-        , protoGC    = Nothing
-        , protoSym   = name
-        , protoIndex = ix
-        , protoSect  = section
+        , protoGC     = Nothing
+        , protoSym    = name
+        , protoIndex  = ix
+        , protoSect   = section
         , protoComdat = comdat
         }
 
@@ -378,19 +485,18 @@ parseFunProto r pm = label "FUNCTION" $ do
      then pushFunProto proto >> return pm
      else return pm { partialDeclares = partialDeclares pm Seq.|> proto }
 
-
-addGlobalAttachments :: PGlobalAttachments -> (PartialModule -> PartialModule)
+addGlobalAttachments :: PGlobalAttachmentsF f -> PartialModule f -> PartialModule f
+addGlobalAttachments gs0 pm | Map.null gs0 = pm
 addGlobalAttachments gs0 pm = pm { partialGlobals = go (partialGlobals pm) gs0 }
-  where
+  where go gs atts =
+          case Seq.viewl gs of
+            Seq.EmptyL -> Seq.empty
 
-  go gs atts | Map.null atts = gs
-
-  go gs atts =
-    case Seq.viewl gs of
-      Seq.EmptyL -> Seq.empty
-
-      g Seq.:< gs' ->
-        let (mb,atts') = Map.updateLookupWithKey (\_ _ -> Nothing) (pgSym g) atts
-         in case mb of
-              Just md -> g { pgMd = md } Seq.<| go gs' atts'
-              Nothing -> g               Seq.<| go gs' atts'
+            -- Try to find the current global in the given attachments
+            -- If it's present, delete it.
+            g Seq.:< gs' ->
+              let (mb, atts') =
+                    Map.updateLookupWithKey (\_ _ -> Nothing) (pgSym g) atts
+              in case mb of
+                    Just md -> g { _pgMd = md } Seq.<| go gs' atts'
+                    Nothing -> g                Seq.<| go gs' atts'

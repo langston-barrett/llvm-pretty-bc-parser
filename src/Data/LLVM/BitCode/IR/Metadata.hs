@@ -14,19 +14,29 @@ Stability   : experimental
 module Data.LLVM.BitCode.IR.Metadata (
     parseMetadataBlock
   , parseMetadataKindEntry
-  , PartialUnnamedMd(..)
+  -- ** Partial unnamed metadata
+  , PartialUnnamedMd
+  , PartialUnnamedMd'(..)
+  -- ** Lenses
+  , pumIndex
+  , pumValues
+  , pumDistinct
+  -- ** Partial unnamed metadata
+  , PartialUnnamedMdF
   , finalizePartialUnnamedMd
   , finalizePValMd
   , InstrMdAttachments
   , PFnMdAttachments
   , PKindMd
   , PGlobalAttachments
+  , PGlobalAttachmentsF
   , ParsedMetadata
+  , LookupMd
   ) where
 
-import           Lens.Micro
+import           Control.Lens hiding (ix)
 import           Control.Monad (foldM)
-import qualified Data.Map  as Map
+import qualified Data.Map as Map
 
 import           Text.LLVM.AST
 
@@ -39,10 +49,10 @@ import           Data.LLVM.BitCode.IR.Metadata.Table
 
 type ParsedMetadata f =
   ( [f NamedMd]
-  , ([f PartialUnnamedMd], [f PartialUnnamedMd])
+  , ([PartialUnnamedMdF f], [PartialUnnamedMdF f])
   , InstrMdAttachments
   , PFnMdAttachments
-  , PGlobalAttachments' f
+  , PGlobalAttachmentsF f
   )
 
 -- | This is the entrypoint parsing a metadata block, it is called from e.g.

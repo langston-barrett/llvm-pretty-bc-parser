@@ -18,7 +18,9 @@ import Data.Maybe (fromMaybe)
 import Data.Semigroup
 import Data.Typeable (Typeable)
 import Data.Word ( Word32 )
-import MonadLib
+import MonadLib hiding (fail)
+import qualified Control.Monad.Fail as Fail
+import           Control.Monad.Fail (MonadFail)
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
 import qualified Control.Exception as X
 import qualified Data.ByteString as BS
@@ -68,6 +70,10 @@ instance MonadPlus Parse where
 
   {-# INLINE mplus #-}
   mplus = (<|>)
+
+instance MonadFail Parse where
+  {-# INLINE fail #-}
+  fail = failWithContext
 
 runParse :: Parse a -> Either Error a
 runParse (Parse m) = case runM m emptyEnv emptyParseState of
@@ -605,6 +611,11 @@ bbEntryName :: Int -> Parse (Maybe BlockLabel)
 bbEntryName n = do
   symtab <- getValueSymtab
   return (mkBlockLabel <$> Map.lookup (SymTabBBEntry n) symtab)
+
+-- | Given the value symtab, lookup the name of a basic block.
+bbEntryName' :: ValueSymtab -> Int -> Maybe BlockLabel
+bbEntryName' symtab n =
+  mkBlockLabel <$> Map.lookup (SymTabBBEntry n) symtab
 
 -- | Lookup the name of a basic block.
 requireBbEntryName :: Int -> Parse BlockLabel
