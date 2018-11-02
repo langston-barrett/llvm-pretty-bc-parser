@@ -132,11 +132,11 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       (fail "Invalid record")
     if recordSize `mod` 2 == 0
     then label "function attachment" $ do
-      att <- Map.fromList <$> parseAttachment r 0
+      att <- Map.fromList <$> parseAttachment mt r 0
       return $! addFnAttachment att pm
     else label "instruction attachment" $ do
       inst <- parseField r 0 numeric
-      patt <- parseAttachment r 1
+      patt <- parseAttachment mt r 1
       att <- mapM (\(k,md) -> (,md) <$> getKind k) patt
       return $! addInstrAttachment inst att pm
 
@@ -580,13 +580,17 @@ parseMetadataEntry _ _ pm (abbrevDef -> Just _) =
 parseMetadataEntry _ _ _ r =
   fail ("unexpected metadata entry: " ++ show r)
 
-parseAttachment :: Record -> Int -> Parse [(PKindMd,PValMd)]
-parseAttachment r l = loop (length (recordFields r) - 1) []
+parseAttachment :: Applicative f
+                => MetadataTable' (LookupMd f)
+                -> Record
+                -> Int
+                -> Parse [(PKindMd, LookupMd f PValMd)]
+parseAttachment mt r l = loop (length (recordFields r) - 1) []
   where
   loop n acc | n < l = return acc
              | otherwise = do
     kind <- parseField r (n - 1) numeric
-    md   <- getMetadata =<< parseField r n numeric
+    md   <- mdForwardRef mt <$> parseField r n numeric
     loop (n - 2) ((kind, md) : acc)
 
 

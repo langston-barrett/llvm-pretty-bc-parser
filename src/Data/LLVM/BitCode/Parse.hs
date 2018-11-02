@@ -397,21 +397,6 @@ setMdTable md = Parse $ do
   ps <- get
   set $! ps { psMdTable = md }
 
-getMetadata :: Int -> Parse PValMd
-getMetadata ix = do
-  ps <- Parse get
-  case resolveMd ix ps of
-    Just tv -> pure tv
-    Nothing -> fail ("metadata index " ++ show ix ++ " is not defined")
-
-resolveMd :: Int -> ParseState -> Maybe PValMd
-resolveMd ix ps = nodeRef `mplus` mdValue
-  where
-  reference = ValMdRef
-  nodeRef   = reference `fmap` Map.lookup ix (psMdRefs ps)
-  mdValue   = lookupValueTableAbs ix (psMdTable ps)
-
-
 type MdRefTable = Map.Map Int Int
 
 setMdRefs :: MdRefTable -> Parse ()

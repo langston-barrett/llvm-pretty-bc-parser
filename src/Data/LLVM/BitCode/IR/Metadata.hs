@@ -26,7 +26,9 @@ module Data.LLVM.BitCode.IR.Metadata (
   , finalizePartialUnnamedMd
   , finalizePValMd
   , InstrMdAttachments
+  , InstrMdAttachmentsF
   , PFnMdAttachments
+  , PFnMdAttachmentsF
   , PKindMd
   , PGlobalAttachments
   , PGlobalAttachmentsF
@@ -50,8 +52,8 @@ import           Data.LLVM.BitCode.IR.Metadata.Table
 type ParsedMetadata f =
   ( [f NamedMd]
   , ([PartialUnnamedMdF f], [PartialUnnamedMdF f])
-  , InstrMdAttachments
-  , PFnMdAttachments
+  , InstrMdAttachmentsF f
+  , PFnMdAttachmentsF f
   , PGlobalAttachmentsF f
   )
 

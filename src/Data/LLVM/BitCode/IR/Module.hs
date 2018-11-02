@@ -21,22 +21,19 @@ import           Data.LLVM.BitCode.Record
 import           Text.LLVM.AST
 
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
-import           Control.Lens
+import           Control.Lens hiding (ix)
 import           Control.Monad (foldM,guard,when,forM_)
 import           Control.Monad.Fail (MonadFail)
 import           Data.Bifunctor
 import qualified Data.Foldable as F
 import           Data.Functor.Compose
 import           Data.List (sortBy)
-import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Ord (comparing)
 import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
-import           Data.Sequence.Lens
 import qualified Data.Text as Text
 import qualified Data.Traversable as T
-import           Data.Validation
 import           Data.Validation (Validation(..), validation)
 import           MonadLib (Id, runId)
 import           MonadLib.Monads (runState, runWriterT)
@@ -94,16 +91,14 @@ finalizeModule pm = label "finalizeModule" $ do
   aliases  <- T.mapM finalizePartialAlias (partialAliases pm)
   unnamed  <- T.mapM finalizePartialUnnamedMd (unnamedMd)
   types    <- resolveTypeDecls
-  -- TODO: Resolve metadata refs
-  let lkp = lookupBlockName (partialDefines pm)
-  defines <- T.mapM (finalizePartialDefine lkp) (partialDefines pm)
+  let lkp = lookupBlockName defs
+  defines  <- T.mapM (finalizePartialDefine lkp) defs
   return emptyModule
     { modDataLayout = partialDataLayout pm
     , modNamedMd    = namedMd
     , modUnnamedMd  = sortBy (comparing umIndex) unnamed
     , modGlobals    = F.toList globals
-    , modDefines    = undefined -- TODO
-      -- F.toList $ fmap runId defs
+    , modDefines    = F.toList defines
     , modTypes      = types
     , modDeclares   = F.toList declares
     , modInlineAsm  = partialInlineAsm pm
@@ -117,7 +112,7 @@ finalizeModule pm = label "finalizeModule" $ do
 -- message.
 --
 -- This is in this module and not "Data.LLVM.BitCode.IR.Metadata.Resolve"
--- because awareness of e.g. 'GlobalList'' and 'DefineList' crosses module
+-- because awareness of e.g. 'GlobalList' and 'DefineList' crosses module
 -- boundaries.
 finalizeMdRefs :: (MonadFail m)
                => [PartialUnnamedMdF (LookupMd (SEW Int PValMd))]
@@ -138,10 +133,7 @@ finalizeMdRefs unnamed named globList defList = do
               pumTable = Map.fromList $ map (\pum -> (pum ^. pumIndex, pum ^. pumValues )) unnamed
 
           -- Resolve references, updating the state
-          unnamed''  <- resolveAll pumTable
-
-          -- Resolve references with the current state
-          named''    <- resolveAllList named
+          _          <- resolveAll pumTable
 
           -- The references are buried a little deep here.
           -- Lenses are a resonable, yet still complex way to do it.
@@ -160,6 +152,10 @@ finalizeMdRefs unnamed named globList defList = do
                                -> m (Validation [w] s')
               traverseCompose' l f s = traverseCompose l (fmap (first (:[])) . f) s
 
+          -- Resolve references with the current state
+          unnamed''  <- traverseCompose' (traverse . pumValues) resolveOne unnamed
+          named''    <- resolveAllList named
+
           globList'' <- traverseCompose (traverse . pgMd) resolveAllMap globList
           defList''  <-
             -- tr resolves some metadata reference deep down in the DefineList
@@ -172,7 +168,9 @@ finalizeMdRefs unnamed named globList defList = do
 
   case (unnamed', named', globList', defList') of
     (Success unnamed'', Success named'', Success globList'', Success defList'') ->
-      _
+      let fixDL :: DefineListF Id -> DefineList PValMd
+          fixDL dl = runId $ (each . partialGlobalMd . each) id dl
+      in pure (named'', unnamed'', globList'', fixDL defList'')
     _ -> fail $ unlines $
             [ "Metadata block contained some unresolvable entries."
             , "This is usually a result of an internal error."
@@ -180,7 +178,7 @@ finalizeMdRefs unnamed named globList defList = do
             , "(list may be incomplete):"
             , concat . concat $
                 let mkErr :: Show a => Validation a c -> [String]
-                    mkErr = validation ((:[]) . show) (const [])
+                    mkErr = validation ((:[]) . (++"\n") . show) (const [])
                 in [ mkErr unnamed'
                    , mkErr named'
                    , mkErr globList'
@@ -188,7 +186,6 @@ finalizeMdRefs unnamed named globList defList = do
                    ]
             , "\nAnd here is a log: "
             ] ++ map Text.unpack log
-    --              alaf Compose l (fmap (first pure) . f) s
 
 -- | Parse an LLVM Module out of the top-level block in a Bitstream.
 parseModuleBlock :: [Entry] -> Parse Module

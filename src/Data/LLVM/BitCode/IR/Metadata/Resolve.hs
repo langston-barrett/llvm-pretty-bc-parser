@@ -27,14 +27,13 @@ module Data.LLVM.BitCode.IR.Metadata.Resolve where
 import           Control.Lens hiding (ix)
 import qualified Data.Text as Text
 import           Data.Text (Text)
-import           Data.Either (partitionEithers)
 import           Data.Functor.Compose (getCompose)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import           Data.Map (Map)
 import           MonadLib
 import           MonadLib.Monads
-import           Data.Validation (Validation(..), _Validation, _Either)
+import           Data.Validation (Validation(..), _Either)
 
 import           Data.LLVM.BitCode.IR.Metadata.Lookup
 
@@ -87,13 +86,13 @@ runSEW sew m =
 -- type StateExceptMapT k v f = StateExceptT (Map k v) k f
 -- type StateExceptMap k v    = StateExcept (Map k v) k
 
-resolveOne :: forall m k v f a. ( Show k           -- Logging
-                                , Show v           -- Logging
-                                , Show a           -- Logging
-                                , WriterM m [Text] -- Logging
-                                , Ord k            -- Map
-                                , StateM m (Map k v)
-                                )
+resolveOne :: forall m k v a. ( Show k           -- Logging
+                              , Show v           -- Logging
+                              , Show a           -- Logging
+                              , WriterM m [Text] -- Logging
+                              , Ord k            -- Map
+                              , StateM m (Map k v)
+                              )
             => Lookup (SEW k v) k v a
             -> m (Validation k a)
 resolveOne sev =

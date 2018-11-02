@@ -1,6 +1,8 @@
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
@@ -13,8 +15,6 @@ import Data.LLVM.BitCode.Bitstream
 import Data.LLVM.BitCode.IR.Blocks
 import Data.LLVM.BitCode.IR.Constants
 import Data.LLVM.BitCode.IR.Metadata
-import Data.LLVM.BitCode.IR.Metadata.Applicative
-import Data.LLVM.BitCode.IR.Metadata.Finalize (finalizePValMd')
 import Data.LLVM.BitCode.IR.Values
 import Data.LLVM.BitCode.Match
 import Data.LLVM.BitCode.Parse
@@ -23,7 +23,7 @@ import Text.LLVM.AST
 import Text.LLVM.Labels
 import Text.LLVM.PP
 
-import Control.Lens (makeLenses, (&), (%~))
+import Control.Lens
 import Control.Monad (when,unless,mplus,mzero,foldM,(<=<),msum)
 import Data.Bits (shiftR,bit,shiftL,testBit,(.&.),(.|.),complement)
 import Data.Int (Int32)
@@ -32,6 +32,7 @@ import Data.Word (Word32)
 import qualified Data.Foldable as F
 import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
+import           Data.Sequence (Seq)
 import qualified Data.Traversable as T
 
 
@@ -111,44 +112,46 @@ finalizeDeclare fp = case protoType fp of
 
 -- Function Body ---------------------------------------------------------------
 
-type BlockList = Seq.Seq PartialBlock
+data PartialBlock' a = PartialBlock
+  { _partialLabel :: !Int
+  , _partialStmts :: Seq a
+  } deriving (Show, Functor)
 
-data PartialBlock = PartialBlock
-  { partialLabel :: !Int
-  , partialStmts :: StmtList
-  } deriving (Show)
+makeLenses ''PartialBlock'
 
 type PStmt = Stmt' Int
 
-type StmtList = Seq.Seq PStmt
+type PartialBlock    = PartialBlock' PStmt
+type PartialBlockF f = PartialBlock' (f PStmt)
 
 -- | A define with a list of statements for a body, instead of a list of basic
 -- bocks.
-data PartialDefine a = PartialDefine
-  { partialLinkage    :: Maybe Linkage
-  , partialGC         :: Maybe GC
-  , partialSection    :: Maybe String
-  , partialRetType    :: Type
-  , partialName       :: Symbol
-  , partialArgs       :: [Typed Ident]
-  , partialVarArgs    :: Bool
-  , partialBody       :: BlockList
-  , partialBlock      :: StmtList
-  , partialBlockId    :: !Int
-  , partialSymtab     :: ValueSymtab
-  , partialMetadata   :: Map.Map PKindMd PValMd
+data PartialDefine' a b c = PartialDefine
+  { _partialLinkage    :: Maybe Linkage
+  , _partialGC         :: Maybe GC
+  , _partialSection    :: Maybe String
+  , _partialRetType    :: Type
+  , _partialName       :: Symbol
+  , _partialArgs       :: [Typed Ident]
+  , _partialVarArgs    :: Bool
+  , _partialBody       :: Seq.Seq c
+  , _partialBlock      :: Seq PStmt
+  , _partialBlockId    :: !Int
+  , _partialSymtab     :: ValueSymtab
+  , _partialMetadata   :: Map.Map PKindMd b
   , _partialGlobalMd  :: [a]
-  , partialComdatName :: Maybe String
+  , _partialComdatName :: Maybe String
   }
 
-makeLenses ''PartialDefine
+makeLenses ''PartialDefine'
 
-type PartialDefineF f = PartialDefine (PartialUnnamedMdF f)
-type DefineList  a = Seq.Seq (PartialDefine a)
-type DefineListF f = Seq.Seq (PartialDefine (f PValMd))
+type PartialDefineF f = PartialDefine' (PartialUnnamedMdF f) (f PValMd) (PartialBlockF f)
+type PartialDefine    = PartialDefine' PartialUnnamedMd PValMd PartialBlock
+type DefineList  a    = Seq.Seq (PartialDefine' a PValMd PartialBlock)
+type DefineListF f    = Seq.Seq (PartialDefine' (f PValMd) (f PValMd) (PartialBlockF f))
 
 -- | Generate a partial function definition from a function prototype.
-emptyPartialDefine :: FunProto -> Parse (PartialDefine f)
+emptyPartialDefine :: FunProto -> Parse (PartialDefineF f)
 emptyPartialDefine proto = do
   (rty,tys,va) <- elimFunPtr (protoType proto)
       `mplus` fail "invalid function type in prototype"
@@ -157,29 +160,29 @@ emptyPartialDefine proto = do
   symtab <- initialPartialSymtab
 
   return PartialDefine
-    { partialLinkage    = protoLinkage proto
-    , partialGC         = protoGC proto
-    , partialSection    = protoSect proto
-    , partialRetType    = rty
-    , partialName       = protoSym proto
-    , partialArgs       = zipWith Typed tys names
-    , partialVarArgs    = va
-    , partialBody       = Seq.empty
-    , partialBlock      = Seq.empty
-    , partialBlockId    = 0
-    , partialSymtab     = symtab
-    , partialMetadata   = Map.empty
-    , _partialGlobalMd  = []
-    , partialComdatName = protoComdat proto
+    { _partialLinkage    = protoLinkage proto
+    , _partialGC         = protoGC proto
+    , _partialSection    = protoSect proto
+    , _partialRetType    = rty
+    , _partialName       = protoSym proto
+    , _partialArgs       = zipWith Typed tys names
+    , _partialVarArgs    = va
+    , _partialBody       = Seq.empty
+    , _partialBlock      = Seq.empty
+    , _partialBlockId    = 0
+    , _partialSymtab     = symtab
+    , _partialMetadata   = Map.empty
+    , _partialGlobalMd   = []
+    , _partialComdatName = protoComdat proto
     }
 
 -- | Set the statement list in a partial define.
-setPartialBlock :: StmtList -> PartialDefine f -> PartialDefine f
-setPartialBlock stmts pd = pd { partialBlock = stmts }
+setPartialBlock :: Seq PStmt -> PartialDefineF f -> PartialDefineF f
+setPartialBlock stmts pd = pd & partialBlock .~ stmts
 
 -- | Set the block list in a partial define.
-setPartialBody :: BlockList -> PartialDefine f -> PartialDefine f
-setPartialBody blocks pd = pd { partialBody = blocks }
+setPartialBody :: Seq.Seq (PartialBlockF f) -> PartialDefineF f -> PartialDefineF f
+setPartialBody blocks pd = pd & partialBody .~ blocks
 
 initialPartialSymtab :: Parse ValueSymtab
 initialPartialSymtab  = do
@@ -190,31 +193,39 @@ initialPartialSymtab  = do
       i <- nextResultId
       return (addBBAnon 0 i emptyValueSymtab)
 
-updateLastStmt :: (PStmt -> PStmt) -> PartialDefine f -> Parse (PartialDefine f)
+updateLastStmt :: forall f. Functor f
+               => (PStmt -> PStmt)
+               -> (PartialDefineF f)
+               -> Parse (PartialDefineF f)
 updateLastStmt f pd = case updatePartialBlock `mplus` updatePartialBody of
   Just pd' -> return pd'
   Nothing  -> fail "No statement to update"
   where
-  updatePartialBlock = updateStmts partialBlock setPartialBlock pd
+  updatePartialBlock :: Maybe (PartialDefineF f)
+  updatePartialBlock = updateStmts f _partialBlock setPartialBlock pd
 
-  updatePartialBody = case Seq.viewr (partialBody pd) of
+  updatePartialBody :: Maybe (PartialDefineF f)
+  updatePartialBody = case Seq.viewr (pd ^. partialBody) of
     blocks Seq.:> b -> do
-      b' <- updateStmts partialStmts setPartialStmts b
+      b' <- updateStmts (fmap f) _partialStmts setPartialStmts b
       return (setPartialBody (blocks Seq.|> b') pd)
     Seq.EmptyR          -> mzero
 
-  updateStmts prj upd a = case Seq.viewr (prj a) of
-    stmts Seq.:> stmt -> return (upd (stmts Seq.|> f stmt) a)
+  updateStmts :: (b -> b)
+              -> (t -> Seq b)
+              -> (Seq b -> t -> a)
+              -> t
+              -> Maybe a
+  updateStmts g prj upd a = case Seq.viewr (prj a) of
+    stmts Seq.:> stmt -> return (upd (stmts Seq.|> g stmt) a)
     Seq.EmptyR        -> mzero
-
-
 
 type BlockLookup = Symbol -> Int -> Parse BlockLabel
 
 lookupBlockName :: DefineList f -> BlockLookup
 lookupBlockName dl = lkp
   where
-  syms = Map.fromList [ (partialName d, partialSymtab d) | d <- F.toList dl ]
+  syms = Map.fromList [ (view partialName d, view partialSymtab d) | d <- F.toList dl ]
   lkp fn bid = case Map.lookup fn syms of
     Nothing -> fail ("symbol " ++ show (ppLLVM (ppSymbol fn)) ++ " is not defined")
     Just st -> case Map.lookup (SymTabBBEntry bid) st of
@@ -224,27 +235,27 @@ lookupBlockName dl = lkp
 -- | Finalize a partial definition.
 --
 -- Finalized partial definitions may still have unresolved metadata references.
-finalizePartialDefine :: Applicative f
-                      => BlockLookup -> PartialDefineF f -> Parse (f Define)
+finalizePartialDefine :: BlockLookup -> PartialDefine -> Parse Define
 finalizePartialDefine lkp pd =
   label "finalizePartialDefine" $
   -- augment the symbol table with implicitly named anonymous blocks, and
   -- generate basic blocks.
-  withValueSymtab (partialSymtab pd) $ do
-    body <- finalizeBody lkp (partialBody pd)
-    md   <- finalizeMetadata (partialMetadata pd)
+  withValueSymtab (_partialSymtab pd) $ do
+    body <- finalizeBody lkp (_partialBody pd)
+    md   <- finalizeMetadata (_partialMetadata pd)
     return $ Define
-      <$> pure (partialLinkage pd)    -- defLinkage
-      <*> pure (partialRetType pd)    -- defRetType
-      <*> pure (partialName pd)       -- defName
-      <*> pure (partialArgs pd)       -- defArgs
-      <*> pure (partialVarArgs pd)    -- defVarArgs
-      <*> pure ([])                   -- defAttrs
-      <*> pure (partialSection pd)    -- defSection
-      <*> pure (partialGC pd)         -- defGC
-      <*> pure body                   -- defBody
-      <*> pure md                     -- defMetadata
-      <*> pure (partialComdatName pd) -- defComdat
+      { defLinkage  = view partialLinkage pd
+      , defRetType  = view partialRetType pd
+      , defName     = view partialName pd
+      , defArgs     = view partialArgs pd
+      , defVarArgs  = view partialVarArgs pd
+      , defAttrs    = []
+      , defSection  = view partialSection pd
+      , defGC       = view partialGC pd
+      , defBody     = body
+      , defMetadata = md
+      , defComdat   = view partialComdatName pd
+      }
 
 finalizeMetadata :: PFnMdAttachments -> Parse FnMdAttachments
 finalizeMetadata patt = Map.fromList <$> mapM f (Map.toList patt)
@@ -274,17 +285,16 @@ declareBlocksRecord :: Match Entry UnabbrevRecord
 declareBlocksRecord  = hasUnabbrevCode 1 <=< unabbrev
 
 -- | Emit a statement to the current partial definition.
-addStmt :: Stmt' Int -> PartialDefine f -> Parse (PartialDefine f)
+addStmt :: Stmt' Int -> PartialDefineF f -> Parse (PartialDefineF f)
 addStmt s d
   | isTerminator (stmtInstr s) = terminateBlock d'
   | otherwise                  = return d'
-  where
-  d' = d { partialBlock = partialBlock d Seq.|> s }
+  where d' = d & partialBlock %~ (Seq.|> s)
 
 -- | Terminate the current basic block.  Resolve the name of the next basic
 -- block as either its symbol from the symbol table, or the next available
 -- anonymous identifier.
-terminateBlock :: PartialDefine f -> Parse (PartialDefine f)
+terminateBlock :: Applicative f => PartialDefineF f -> Parse (PartialDefineF f)
 terminateBlock d = do
   let next = partialBlockId d + 1
   mb <- bbEntryName next
@@ -293,33 +303,33 @@ terminateBlock d = do
     Nothing -> do
       -- no label, use the next result id
       l <- nextResultId
-      return d { partialSymtab = addBBAnon next l (partialSymtab d) }
+      return d { _partialSymtab = addBBAnon next l (_partialSymtab d) }
 
   return d'
-    { partialBody  = partialBody d Seq.|> PartialBlock
+    { _partialBody  = view partialBody d Seq.|> PartialBlock
       { partialLabel = partialBlockId d
       , partialStmts = partialBlock   d
       }
-    , partialBlockId = next
-    , partialBlock   = Seq.empty
+    , _partialBlockId = next
+    , _partialBlock   = Seq.empty
     }
 
 -- | Process a @BlockList@, turning it into a list of basic blocks.
-finalizeBody :: BlockLookup -> BlockList -> Parse [BasicBlock]
+finalizeBody :: BlockLookup -> Seq.Seq PartialBlock -> Parse [BasicBlock]
 finalizeBody lkp = fmap F.toList . T.mapM (finalizePartialBlock lkp)
 
-setPartialStmts :: StmtList -> PartialBlock -> PartialBlock
-setPartialStmts stmts pb = pb { partialStmts = stmts }
+setPartialStmts :: Seq a -> PartialBlock' a -> PartialBlock' a
+setPartialStmts stmts pb = pb { _partialStmts = stmts }
 
 -- | Process a partial basic block into a full basic block.
 finalizePartialBlock :: BlockLookup -> PartialBlock -> Parse BasicBlock
 finalizePartialBlock lkp pb = BasicBlock
-                          <$> bbEntryName (partialLabel pb)
-                          <*> finalizeStmts lkp (partialStmts pb)
+                          <$> bbEntryName (view partialLabel pb)
+                          <*> finalizeStmts lkp (view partialStmts pb)
 
 -- | Process a list of statements with explicit block id labels into one with
 -- textual labels.
-finalizeStmts :: BlockLookup -> StmtList -> Parse [Stmt]
+finalizeStmts :: BlockLookup -> Seq PStmt -> Parse [Stmt]
 finalizeStmts lkp = mapM (finalizeStmt lkp) . F.toList
 
 finalizeStmt :: BlockLookup -> Stmt' Int -> Parse Stmt
@@ -355,7 +365,7 @@ parseFunctionBlock unnamedGlobals ents =
         vt  <- getValueTable
 
     -- merge the symbol table with the anonymous symbol table
-    return pd' { partialSymtab = partialSymtab pd' `Map.union` symtab }
+    return pd' { _partialSymtab = view partialSymtab pd' `Map.union` symtab }
 
 -- | Parse the members of the function block
 parseFunctionBlockEntry :: forall f. Applicative f
@@ -697,12 +707,12 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     iaId    <- field 3 numeric
 
     scope <- if scopeId > 0
-                then getMetadata (scopeId - 1)
-                else fail "No scope provided"
+             then getMetadata (scopeId - 1)
+             else fail "No scope provided"
 
     ia <- if iaId > 0
-             then Just `fmap` getMetadata (iaId - 1)
-             else return Nothing
+          then Just `fmap` getMetadata (iaId - 1)
+          else return Nothing
 
     let loc = DebugLoc
           { dlLine  = line
@@ -887,9 +897,10 @@ parseFunctionBlockEntry globals t d (metadataAttachmentBlockId -> Just es) = do
      (fail "parseFunctionBlockEntry PANIC: unexpected local unnamed metadata")
   unless (null globalUnnamedMds)
      (fail "parseFunctionBlockEntry PANIC: unexpected global unnamed metadata")
-  return d { partialBody     = addInstrAttachments instrAtt (partialBody d)
-           , partialMetadata = Map.union fnAtt (partialMetadata d)
-           }
+  pure $
+    d { _partialBody     = addInstrAttachments instrAtt <$> (view partialBody <$> d)
+      , _partialMetadata = Map.union fnAtt <$> (view partialMetadata <$> d)
+      }
 
 parseFunctionBlockEntry _ _ d (abbrevDef -> Just _) =
   -- ignore any abbreviation definitions
@@ -902,9 +913,10 @@ parseFunctionBlockEntry _ _ d (uselistBlockId -> Just _) =
 parseFunctionBlockEntry _ _ _ e =
   fail ("function block: unexpected: " ++ show e)
 
-addInstrAttachments :: InstrMdAttachments -> BlockList -> BlockList
+addInstrAttachments :: Applicative f => InstrMdAttachmentsF f -> Seq.Seq PartialBlock -> Seq.Seq PartialBlock
 addInstrAttachments atts blocks = go 0 (Map.toList atts) (Seq.viewl blocks)
   where
+  go :: Applicative f => Int -> [(Int, [(KindMd, f PValMd)])] -> _ -> _
   go _   []  (b Seq.:< bs) = b Seq.<| bs
   go off mds (b Seq.:< bs) =
     b' Seq.<| go (off + numStmts) delay (Seq.viewl bs)
@@ -919,6 +931,7 @@ addInstrAttachments atts blocks = go 0 (Map.toList atts) (Seq.viewl blocks)
     b' | null use  = b
        | otherwise = b { partialStmts = foldl addMd (partialStmts b) use }
 
+    addMd :: Seq.Seq _ -> _ -> _
     addMd stmts (i,md') = Seq.adjust update i stmts
       where
       update (Result n s md) = Result n s (md ++ md')
@@ -933,7 +946,7 @@ baseType (Vector _ ty) = ty
 baseType ty = ty
 
 -- [n x operands]
-parseGEP :: ValueTable -> Maybe Bool -> Record -> PartialDefine f -> Parse (PartialDefine f)
+parseGEP :: ValueTable -> Maybe Bool -> Record -> PartialDefineF f -> Parse (PartialDefineF f)
 parseGEP t mbInBound r d = do
   (ib, tv, r', ix) <-
       case mbInBound of
@@ -967,11 +980,11 @@ parseGEP t mbInBound r d = do
   result rty (GEP ib tv args) d
 
 -- | Generate a statement that doesn't produce a result.
-effect :: Instr' Int -> PartialDefine f -> Parse (PartialDefine f)
+effect :: Instr' Int -> PartialDefineF f -> Parse (PartialDefineF f)
 effect i d = addStmt (Effect i []) d
 
 -- | Try to name results, fall back on leaving them as effects.
-result :: Type -> Instr' Int -> PartialDefine f -> Parse (PartialDefine f)
+result :: Type -> Instr' Int -> PartialDefineF f -> Parse (PartialDefineF f)
 result (PrimType Void) i d = effect i d
 result ty              i d = do
   res <- nameNextValue ty

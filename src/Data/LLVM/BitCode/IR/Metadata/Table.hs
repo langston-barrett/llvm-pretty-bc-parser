@@ -195,8 +195,10 @@ mkMdRefTable mt = Map.mapMaybe step (mt ^. mtNodes)
 -- ** PartialMetadata
 
 type PKindMd               = Int
-type InstrMdAttachments    = Map.Map Int [(KindMd,PValMd)]
+type InstrMdAttachments    = Map.Map Int [(KindMd, PValMd)]
+type InstrMdAttachmentsF f = Map.Map Int [(KindMd, f PValMd)]
 type PFnMdAttachments      = Map.Map PKindMd PValMd
+type PFnMdAttachmentsF   f = Map.Map PKindMd (f PValMd)
 type PGlobalAttachmentsF f = Map.Map Symbol (Map.Map KindMd (f PValMd))
 type PGlobalAttachments    = Map.Map Symbol (Map.Map KindMd PValMd)
 
@@ -207,8 +209,8 @@ data PartialMetadata f = PartialMetadata
   , _pmNamedEntries     :: Map.Map String      [f Int]
   , _pmGlobalAttachments:: PGlobalAttachmentsF f
   , _pmNextName         :: Maybe String
-  , _pmInstrAttachments :: InstrMdAttachments
-  , _pmFnAttachments    :: PFnMdAttachments
+  , _pmInstrAttachments :: InstrMdAttachmentsF f
+  , _pmFnAttachments    :: PFnMdAttachmentsF   f
   }
 
 makeLenses ''PartialMetadata
@@ -238,11 +240,14 @@ setNextName :: String -> PartialMetadata m -> PartialMetadata m
 setNextName name = pmNextName ?~ name
 
 -- left-biased union, since the parser overwrites metadata as it encounters it
-addFnAttachment :: PFnMdAttachments -> PartialMetadata m -> PartialMetadata m
+addFnAttachment :: PFnMdAttachmentsF f -> PartialMetadata f -> PartialMetadata f
 addFnAttachment att = pmFnAttachments %~ Map.union att
 
-addInstrAttachment :: Int -> [(KindMd,PValMd)]
-                   -> PartialMetadata m -> PartialMetadata m
+addInstrAttachment :: Applicative f
+                   => Int
+                   -> [(KindMd, f PValMd)]
+                   -> PartialMetadata f
+                   -> PartialMetadata f
 addInstrAttachment instr md = pmInstrAttachments %~ Map.insert instr md
 
 nameMetadataA :: Applicative f
