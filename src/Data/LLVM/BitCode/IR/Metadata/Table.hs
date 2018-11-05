@@ -6,7 +6,7 @@ License     : BSD-3
 Maintainer  : atomb@galois.com
 Stability   : experimental
 
-This module 'MetadataTable' and 'PartialMetadataTable', which are used
+This module 'MetadataTable' and 'PartialMetadata', which are used
 internally while processing a metadata block.
 -}
 

@@ -18,8 +18,9 @@ import Data.LLVM.BitCode.Record
 import Text.LLVM.AST
 
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
-import Control.Monad (foldM,guard,when,forM_)
+import Control.Monad (foldM,guard,when,forM_,(>=>))
 import Data.List (sortBy)
+import Data.Maybe (mapMaybe)
 import Data.Ord (comparing)
 import qualified Data.Foldable as F
 import qualified Data.Map as Map
@@ -39,6 +40,7 @@ data PartialModule = PartialModule
   , partialComdat     :: Seq.Seq (String,SelectionKind)
   , partialAliasIx    :: !Int
   , partialAliases    :: AliasList
+  , partialMdRefs     :: Map.Map Int Int
   , partialNamedMd    :: [NamedMd]
   , partialUnnamedMd  :: [PartialUnnamedMd]
   , partialSections   :: Seq.Seq String
@@ -105,6 +107,24 @@ parseModuleBlock ents = label "MODULE_BLOCK" $ do
       case mb of
         Just es -> parseValueSymbolTableBlock es
         Nothing -> return emptyValueSymtab
+
+    -- To resolve forward references to metadata nodes, we traverse the module
+    -- entries, collectng a map of IDs (Ints) and their referents.
+
+    -- First, we jump into any entries that contain metadata blocks.
+    metadataMap <- label "metadata map" $ preparseMetadata ents
+    --   _
+      -- case metadataBlockId ent of
+      --   Nothing -> _
+      -- _
+      -- parseModuleBlockEntry pm (metadataBlockId -> Just es) = label "METADATA_BLOCK_ID" $ do
+      --   vt <- getValueTable
+      --   let globalsSoFar = length (partialUnnamedMd pm)
+      --   (ns,(gs,_),_,_,atts) <- parseMetadataBlock globalsSoFar vt es
+      --   return $ addGlobalAttachments atts pm
+      --     { partialNamedMd   = partialNamedMd   pm ++ ns
+      --     , partialUnnamedMd = partialUnnamedMd pm ++ gs
+      --     }
 
     pm <- withValueSymtab symtab
         $ foldM parseModuleBlockEntry emptyPartialModule ents
