@@ -14,11 +14,13 @@ import Text.LLVM.PP
 
 import Control.Applicative (Alternative(..))
 import Control.Monad.Fix (MonadFix)
+import Control.Monad.Fail (MonadFail)
+import qualified Control.Monad.Fail as Fail
 import Data.Maybe (fromMaybe)
 import Data.Semigroup
 import Data.Typeable (Typeable)
 import Data.Word ( Word32 )
-import MonadLib
+import MonadLib hiding (fail)
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
 import qualified Control.Exception as X
 import qualified Data.ByteString as BS
@@ -68,6 +70,9 @@ instance MonadPlus Parse where
 
   {-# INLINE mplus #-}
   mplus = (<|>)
+
+instance MonadFail Parse where
+  fail = failWithContext
 
 runParse :: Parse a -> Either Error a
 runParse (Parse m) = case runM m emptyEnv emptyParseState of
@@ -336,7 +341,7 @@ lookupValue n = lookupValueTable n `fmap` getValueTable
 -- | Lookup lazily, hiding an error in the result if the entry doesn't exist by
 -- the time it's needed.  NOTE: This always looks up an absolute index, never a
 -- relative one.
-forwardRef :: [String] -> Int -> ValueTable -> Typed PValue
+forwardRef :: [String] -> Int -> ValueTable' a -> a
 forwardRef cxt n vt =
   fromMaybe (X.throw (BadValueRef cxt n)) (lookupValueTableAbs n vt)
 
