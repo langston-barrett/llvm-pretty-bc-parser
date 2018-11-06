@@ -2,7 +2,7 @@
 
 module Data.LLVM.BitCode.IR.Values (
     getValueTypePair
-  , getConstantFwdRef, getConstantFwdRefAdjustedId 
+  , getConstantFwdRef, getConstantFwdRefAdjustedId
   , getValue
   , getFnValueById, getFnValueById'
   , parseValueSymbolTableBlock
@@ -12,6 +12,7 @@ import Data.LLVM.BitCode.Bitstream
 import Data.LLVM.BitCode.Match
 import Data.LLVM.BitCode.Parse
 import Data.LLVM.BitCode.Record
+import Data.LLVM.BitCode.IR.Metadata.Table (addMetadataType)
 import Text.LLVM.AST
 
 import Control.Monad ((<=<),foldM)
@@ -76,7 +77,7 @@ getFnValueById' mbVt ty n = label "getFnValueById'" $ case ty of
   PrimType Metadata -> do
     cxt <- getContext
     md  <- getMdTable
-    return (forwardRef cxt n md)
+    return (addMetadataType $ forwardRef cxt n md)
 
   _ -> do
     mb <- lookupValueAbs n

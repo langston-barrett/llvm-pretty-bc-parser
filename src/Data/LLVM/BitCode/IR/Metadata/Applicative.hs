@@ -32,9 +32,10 @@ module Data.LLVM.BitCode.IR.Metadata.Applicative
   , tupleA3
   , commuteMaybe
   , seqMap
+  , seqMapKeys
   ) where
 
-import           Control.Arrow (first)
+import           Control.Arrow (first, second)
 import           Data.Functor.Compose (Compose(..))
 import           Data.Map (Map)
 import qualified Data.Map as Map
@@ -118,3 +119,7 @@ commuteMaybe Nothing    = pure Nothing
 -- | Sequence applicative actions in the keys of a map
 seqMap :: (Ord a, Applicative n) => Map a (n b) -> n (Map a b)
 seqMap m = fmap Map.fromList $ traverse (tupleA2 . first pure) $ Map.toList m
+
+-- | Sequence applicative actions in the keys of a map
+seqMapKeys :: (Ord a, Applicative n) => Map (n a) b -> n (Map a b)
+seqMapKeys m = fmap Map.fromList $ traverse (tupleA2 . second pure) $ Map.toList m

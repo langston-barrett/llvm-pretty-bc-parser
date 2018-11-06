@@ -39,8 +39,8 @@ type LookupMd f = Lookup f Int PValMd
 -- ** MetadataTable
 
 -- | A metadata table where the mapped values are computed in the monad m.
-data MetadataTable' f = MetadataTable
-  { _mtEntries   :: MdTable' f
+data MetadataTable' a = MetadataTable
+  { _mtEntries   :: MdTable' a
   , _mtNextNode  :: !Int
   , _mtNodes     :: Map.Map Int (Bool, Bool, Int)
                    -- ^ The entries in the map are: is the entry function local,
@@ -51,7 +51,8 @@ makeLenses ''MetadataTable'
 
 -- | We only store @PValMd@ in the table. @Typed PValue@s can be recovered
 -- through application of the function @Typed (PrimType Metadata)@.
-type MetadataTable    = MetadataTable' Id
+type MetadataTable    = MetadataTable' PValMd
+type MetadataTableF f = MetadataTable' (f PValMd)
 
 emptyMetadataTable' :: Int -- ^ globals seen so far
                     -> MdTable' a
@@ -62,32 +63,32 @@ emptyMetadataTable' globals es = MetadataTable
   , _mtNodes     = Map.empty
   }
 
--- metadata :: PValMd -> Typed PValue
--- metadata  = Typed (PrimType Metadata) . ValMd
+addMetadataType :: PValMd -> Typed PValue
+addMetadataType = Typed (PrimType Metadata) . ValMd
 
-addMetadataA :: Functor f => f PValMd  -> MetadataTable' f -> (Int, MetadataTable' f)
+addMetadataA :: Functor f => f PValMd  -> MetadataTableF f -> (Int, MetadataTableF f)
 addMetadataA val mt = (ix', mt & mtEntries .~ es')
   where (ix', es') = addValue' val (mt ^. mtEntries)
 
-addMetadata :: Applicative f => PValMd -> MetadataTable' f -> (Int, MetadataTable' f)
+addMetadata :: Applicative f => PValMd -> MetadataTableF f -> (Int, MetadataTableF f)
 addMetadata val = addMetadataA (pure val)
 
-addMdValue :: Functor f => f (Typed PValue) -> MetadataTable' f -> MetadataTable' f
+addMdValue :: Functor f => f (Typed PValue) -> MetadataTableF f -> MetadataTableF f
 addMdValue tv mt = mt & mtEntries %~ addValue (ValMdValue <$> tv)
 
-addString :: Applicative m => m String -> MetadataTable' m -> MetadataTable' m
+addString :: Applicative m => m String -> MetadataTableF m -> MetadataTableF m
 addString str pm =
   pm &  mtEntries
      %~ addValue (ValMdString <$> str)
 
 addStrings :: Applicative m
            => [m String]
-           -> MetadataTable' m
-           -> MetadataTable' m
+           -> MetadataTableF m
+           -> MetadataTableF m
 addStrings strs mt = foldl (flip addString) mt strs
 
 nameNode :: Applicative m
-         => Bool -> Bool -> Int -> MetadataTable' m -> MetadataTable' m
+         => Bool -> Bool -> Int -> MetadataTableF m -> MetadataTableF m
 nameNode fnLocal isDistinct ix mt =
   mt & mtNextNode %~ (+1) -- Increment node count
      & mtNodes    %~ Map.insert ix (fnLocal, isDistinct, mt ^. mtNextNode)
@@ -99,26 +100,26 @@ addNameNode :: Applicative f
             -> (a -> PValMd)
             -> Bool -- ^ Function local?
             -> Bool -- ^ Distinct?
-            -> MetadataTable' f
-            -> MetadataTable' f
+            -> MetadataTableF f
+            -> MetadataTableF f
 addNameNode v g fnLocal isDistinct mt = nameNode fnLocal isDistinct ix mt'
   where (ix, mt') = addMetadataA (g <$> v) mt
 
 addLoc :: Applicative f
-       => Bool -> f PDebugLoc -> MetadataTable' f -> MetadataTable' f
+       => Bool -> f PDebugLoc -> MetadataTableF f -> MetadataTableF f
 addLoc isDistinct loc = addNameNode loc ValMdLoc False isDistinct
 
 addDebugInfo :: Applicative f
-             => Bool -> f (DebugInfo' Int) -> MetadataTable' f -> MetadataTable' f
+             => Bool -> f (DebugInfo' Int) -> MetadataTableF f -> MetadataTableF f
 addDebugInfo isDistinct di = addNameNode di ValMdDebugInfo False isDistinct
 
 -- | Add a new node, that might be distinct.
 addNode :: Applicative f
-        => Bool -> f [Maybe PValMd] -> MetadataTable' f -> MetadataTable' f
+        => Bool -> f [Maybe PValMd] -> MetadataTableF f -> MetadataTableF f
 addNode isDistinct vals = addNameNode vals ValMdNode False isDistinct
 
 addOldNode :: Applicative f
-           => Bool -> f [Typed PValue] -> MetadataTable' f -> MetadataTable' f
+           => Bool -> f [Typed PValue] -> MetadataTableF f -> MetadataTableF f
 addOldNode fnLocal vals = addNameNode vals (ValMdNode . map (Just . ValMdValue)) fnLocal False
 
 -- *** Forward references
@@ -126,7 +127,7 @@ addOldNode fnLocal vals = addNameNode vals (ValMdNode . map (Just . ValMdValue))
 -- | Either (1) find a value in the 'mtNodes' and return its TODO,
 --   or use a forward reference to the value.
 mdForwardRef :: (Applicative f)
-             => MetadataTable' (LookupMd f)
+             => MetadataTableF (LookupMd f)
              -> Int
              -> LookupMd f PValMd
 mdForwardRef mt ix =
@@ -136,7 +137,7 @@ mdForwardRef mt ix =
   where thd (_, _, r) = ValMdRef r -- "third"
 
 mdForwardRefOrNull :: (Applicative f)
-                   => MetadataTable' (LookupMd f)
+                   => MetadataTableF (LookupMd f)
                    -> Int
                    -> Maybe (LookupMd f PValMd)
 mdForwardRefOrNull mt ix | ix > 0    = Just $ mdForwardRef mt (ix - 1)
@@ -144,12 +145,12 @@ mdForwardRefOrNull mt ix | ix > 0    = Just $ mdForwardRef mt (ix - 1)
 
 -- | This version is useful in 'Compose'd blocks
 mdForwardRefOrNull' :: (Applicative f)
-                    => MetadataTable' (LookupMd f)
+                    => MetadataTableF (LookupMd f)
                     -> Int
                     -> LookupMd f (Maybe PValMd)
 mdForwardRefOrNull' mt = commuteMaybe . mdForwardRefOrNull mt
 
-mdNodeRef :: Applicative f => [String] -> MetadataTable' f -> Int -> f Int
+mdNodeRef :: Applicative f => [String] -> MetadataTableF f -> Int -> f Int
 mdNodeRef cxt mt ix =
   case Map.lookup ix (mt ^. mtNodes) of
     Just x  -> pure $ thd x
@@ -158,7 +159,7 @@ mdNodeRef cxt mt ix =
 
 mdString :: Applicative f
          => [String]
-         -> MetadataTable' (LookupMd f)
+         -> MetadataTableF (LookupMd f)
          -> Int
          -> LookupMd f String
 mdString cxt mt ix =
@@ -168,7 +169,7 @@ mdString cxt mt ix =
 
 mdStringOrNull :: Applicative f
                => [String]
-               -> MetadataTable' (LookupMd f)
+               -> MetadataTableF (LookupMd f)
                -> Int
                -> Maybe (LookupMd f String)
 mdStringOrNull cxt mt ix =
@@ -182,7 +183,7 @@ mdStringOrNull cxt mt ix =
 -- | This version is useful in 'Compose'd blocks
 mdStringOrNull' :: Applicative f
                 => [String]
-                -> MetadataTable' (LookupMd f)
+                -> MetadataTableF (LookupMd f)
                 -> Int
                 -> LookupMd f (Maybe String)
 mdStringOrNull' cxt mt = commuteMaybe . mdStringOrNull cxt mt
@@ -196,28 +197,30 @@ mkMdRefTable mt = Map.mapMaybe step (mt ^. mtNodes)
 -- ** PartialMetadata
 
 type PKindMd               = Int
-type InstrMdAttachments    = Map.Map Int [(KindMd,PValMd)]
+type InstrMdAttachments    = Map.Map Int [(KindMd, PValMd)]
+type InstrMdAttachmentsF f = Map.Map Int [(KindMd, f PValMd)]
 type PFnMdAttachments      = Map.Map PKindMd PValMd
-type PGlobalAttachments' v = Map.Map Symbol v
-type PGlobalAttachments    = Map.Map Symbol (Map.Map KindMd PValMd)
+type PFnMdAttachmentsF   f = Map.Map PKindMd (f PValMd)
+type PGlobalAttachmentsF f = Map.Map Int (Map.Map KindMd (f PValMd))
+type PGlobalAttachments    = Map.Map Int (Map.Map KindMd PValMd)
 
 -- | The fields wrapped in a @m@ are the ones that use forward references while
 -- they're being parsed.
-data PartialMetadata m = PartialMetadata
-  { _pmEntries          :: MetadataTable'       m
-  , _pmNamedEntries     :: Map.Map String      (m [Int])
-  , _pmGlobalAttachments:: PGlobalAttachments' (m (Map.Map KindMd PValMd))
+data PartialMetadata f = PartialMetadata
+  { _pmEntries          :: MetadataTableF      f
+  , _pmNamedEntries     :: Map.Map String      (f [Int])
+  , _pmGlobalAttachments:: PGlobalAttachmentsF f
   , _pmNextName         :: Maybe String
-  , _pmInstrAttachments :: InstrMdAttachments
-  , _pmFnAttachments    :: PFnMdAttachments
+  , _pmInstrAttachments :: InstrMdAttachmentsF f
+  , _pmFnAttachments    :: PFnMdAttachmentsF   f
   }
 
 makeLenses ''PartialMetadata
 
-emptyPartialMetadata :: Functor m
+emptyPartialMetadata :: Functor f
                      => Int {- ^ globals seen so far -}
-                     -> MdTable' m
-                     -> PartialMetadata m
+                     -> MdTableF f
+                     -> PartialMetadata f
 emptyPartialMetadata globals es = PartialMetadata
   { _pmEntries           = emptyMetadataTable' globals es
   , _pmNamedEntries      = Map.empty
@@ -227,23 +230,26 @@ emptyPartialMetadata globals es = PartialMetadata
   , _pmGlobalAttachments = Map.empty
   }
 
-addGlobalAttachmentsA :: Applicative m
-                      => Symbol                    -- ^ name of the global to attach to
-                      -> m (Map.Map KindMd PValMd) -- ^ metadata references to attach
-                      -> PartialMetadata m
-                      -> PartialMetadata m
-addGlobalAttachmentsA sym mds pm =
-  pm & pmGlobalAttachments %~ Map.insert sym mds
+addGlobalAttachmentsA :: Applicative f
+                      => Int                       -- ^ ID of the global to attach to
+                      -> Map.Map KindMd (f PValMd) -- ^ metadata references to attach
+                      -> PartialMetadata f
+                      -> PartialMetadata f
+addGlobalAttachmentsA ix mds pm =
+  pm & pmGlobalAttachments %~ Map.insert ix mds
 
 setNextName :: String -> PartialMetadata m -> PartialMetadata m
 setNextName name = pmNextName ?~ name
 
 -- left-biased union, since the parser overwrites metadata as it encounters it
-addFnAttachment :: PFnMdAttachments -> PartialMetadata m -> PartialMetadata m
+addFnAttachment :: PFnMdAttachmentsF f -> PartialMetadata f -> PartialMetadata f
 addFnAttachment att = pmFnAttachments %~ Map.union att
 
-addInstrAttachment :: Int -> [(KindMd,PValMd)]
-                   -> PartialMetadata m -> PartialMetadata m
+addInstrAttachment :: Applicative f
+                   => Int
+                   -> [(KindMd, f PValMd)]
+                   -> PartialMetadata f
+                   -> PartialMetadata f
 addInstrAttachment instr md = pmInstrAttachments %~ Map.insert instr md
 
 nameMetadataA :: Applicative m

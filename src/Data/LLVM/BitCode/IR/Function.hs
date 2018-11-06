@@ -8,7 +8,7 @@ module Data.LLVM.BitCode.IR.Function where
 import Data.LLVM.BitCode.Bitstream
 import Data.LLVM.BitCode.IR.Blocks
 import Data.LLVM.BitCode.IR.Constants
-import Data.LLVM.BitCode.IR.Metadata
+import Data.LLVM.BitCode.IR.Metadata as Md
 import Data.LLVM.BitCode.IR.Values
 import Data.LLVM.BitCode.Match
 import Data.LLVM.BitCode.Parse
@@ -27,6 +27,7 @@ import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
 import qualified Data.Traversable as T
 
+import Debug.Trace
 
 -- Function Aliases ------------------------------------------------------------
 
@@ -109,20 +110,19 @@ type DefineList = Seq.Seq PartialDefine
 -- | A define with a list of statements for a body, instead of a list of basic
 -- bocks.
 data PartialDefine = PartialDefine
-  { partialLinkage  :: Maybe Linkage
-  , partialGC       :: Maybe GC
-  , partialSection  :: Maybe String
-  , partialRetType  :: Type
-  , partialName     :: Symbol
-  , partialArgs     :: [Typed Ident]
-  , partialVarArgs  :: Bool
-  , partialBody     :: BlockList
-  , partialBlock    :: StmtList
-  , partialBlockId  :: !Int
-  , partialSymtab   :: ValueSymtab
-  , partialMetadata :: Map.Map PKindMd PValMd
-  , partialGlobalMd :: [PartialUnnamedMd]
-  , partialComdatName   :: Maybe String
+  { partialLinkage    :: Maybe Linkage
+  , partialGC         :: Maybe GC
+  , partialSection    :: Maybe String
+  , partialRetType    :: Type
+  , partialName       :: Symbol
+  , partialArgs       :: [Typed Ident]
+  , partialVarArgs    :: Bool
+  , partialBody       :: BlockList
+  , partialBlock      :: StmtList
+  , partialBlockId    :: !Int
+  , partialSymtab     :: ValueSymtab
+  , partialMetadata   :: Map.Map PKindMd PValMd
+  , partialComdatName :: Maybe String
   } deriving (Show)
 
 -- | Generate a partial function definition from a function prototype.
@@ -135,20 +135,19 @@ emptyPartialDefine proto = do
   symtab <- initialPartialSymtab
 
   return PartialDefine
-    { partialLinkage  = protoLinkage proto
-    , partialGC       = protoGC proto
-    , partialSection  = protoSect proto
-    , partialRetType  = rty
-    , partialName     = protoSym proto
-    , partialArgs     = zipWith Typed tys names
-    , partialVarArgs  = va
-    , partialBody     = Seq.empty
-    , partialBlock    = Seq.empty
-    , partialBlockId  = 0
-    , partialSymtab   = symtab
-    , partialMetadata = Map.empty
-    , partialGlobalMd = []
-    , partialComdatName   = protoComdat proto
+    { partialLinkage    = protoLinkage proto
+    , partialGC         = protoGC proto
+    , partialSection    = protoSect proto
+    , partialRetType    = rty
+    , partialName       = protoSym proto
+    , partialArgs       = zipWith Typed tys names
+    , partialVarArgs    = va
+    , partialBody       = Seq.empty
+    , partialBlock      = Seq.empty
+    , partialBlockId    = 0
+    , partialSymtab     = symtab
+    , partialMetadata   = Map.empty
+    , partialComdatName = protoComdat proto
     }
 
 -- | Set the statement list in a partial define.
@@ -207,7 +206,7 @@ finalizePartialDefine lkp pd =
   -- generate basic blocks.
   withValueSymtab (partialSymtab pd) $ do
     body <- finalizeBody lkp (partialBody pd)
-    md <- finalizeMetadata (partialMetadata pd)
+    md   <- finalizeMetadata (partialMetadata pd)
     return Define
       { defLinkage  = partialLinkage pd
       , defGC       = partialGC pd
@@ -680,18 +679,18 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     iaId    <- field 3 numeric
 
     scope <- if scopeId > 0
-                then getMetadata (scopeId - 1)
-                else fail "No scope provided"
+             then trace ("calling getMetadata (fun1): " ++ show (scopeId - 1)) (getMetadata (scopeId - 1))
+             else fail "No scope provided"
 
     ia <- if iaId > 0
-             then Just `fmap` getMetadata (iaId - 1)
-             else return Nothing
+          then Just `fmap` trace ("calling getMetadata (fun2): " ++ show (iaId - 1)) (getMetadata (iaId - 1))
+          else return Nothing
 
     let loc = DebugLoc
           { dlLine  = line
           , dlCol   = col
-          , dlScope = typedValue scope
-          , dlIA    = typedValue `fmap` ia
+          , dlScope = scope
+          , dlIA    = ia
           }
     setLastLoc loc
     updateLastStmt (extendMetadata ("dbg", ValMdLoc loc)) d
@@ -857,22 +856,21 @@ parseFunctionBlockEntry _ _ d (valueSymtabBlockId -> Just _) = do
   -- this is parsed before any of the function block
   return d
 
-parseFunctionBlockEntry globals t d (metadataBlockId -> Just es) = do
-  (_, (globalUnnamedMds, localUnnamedMds), _, _, _) <- parseMetadataBlock globals t es
-  if (null localUnnamedMds)
-    then return d { partialGlobalMd = globalUnnamedMds ++ partialGlobalMd d }
-    else return d -- silently drop unexpected local unnamed metadata
+parseFunctionBlockEntry _ _ d (metadataBlockId -> Just _) = do
+  return $ trace "~~~~~~~~~metadataBlockId" $ d
 
-parseFunctionBlockEntry globals t d (metadataAttachmentBlockId -> Just es) = do
-  (_,(globalUnnamedMds, localUnnamedMds),instrAtt,fnAtt,_)
-     <- parseMetadataBlock globals t es
-  unless (null localUnnamedMds)
-     (fail "parseFunctionBlockEntry PANIC: unexpected local unnamed metadata")
-  unless (null globalUnnamedMds)
-     (fail "parseFunctionBlockEntry PANIC: unexpected global unnamed metadata")
-  return d { partialBody     = addInstrAttachments instrAtt (partialBody d)
-           , partialMetadata = Map.union fnAtt (partialMetadata d)
-           }
+parseFunctionBlockEntry _ _ d (metadataAttachmentBlockId -> Just _) =
+  return d
+  -- TODO: Find out what functions metadata blocks are attached to?
+  -- (_,(globalUnnamedMds, localUnnamedMds),instrAtt,fnAtt,_)
+  --    <- parseMetadataBlock globals t es
+  -- unless (null localUnnamedMds)
+  --    (fail "parseFunctionBlockEntry PANIC: unexpected local unnamed metadata")
+  -- unless (null globalUnnamedMds)
+  --    (fail "parseFunctionBlockEntry PANIC: unexpected global unnamed metadata")
+  -- return d { partialBody     = addInstrAttachments instrAtt (partialBody d)
+  --          , partialMetadata = Map.union fnAtt (partialMetadata d)
+  --          }
 
 parseFunctionBlockEntry _ _ d (abbrevDef -> Just _) =
   -- ignore any abbreviation definitions
@@ -885,6 +883,16 @@ parseFunctionBlockEntry _ _ d (uselistBlockId -> Just _) = do
 parseFunctionBlockEntry _ _ _ e = do
   fail ("function block: unexpected: " ++ show e)
 
+parseAttachment :: Record -> Int -> Parse [(PKindMd,PValMd)]
+parseAttachment r l = loop (length (recordFields r) - 1) []
+  where
+  loop n acc | n < l = return acc
+             | otherwise = do
+    kind <- parseField r (n - 1) numeric
+
+    mdix <- parseField r n numeric
+    md   <- trace ("calling getMetadata: " ++ show mdix) (getMetadata mdix)
+    loop (n - 2) ((kind, md) : acc)
 addInstrAttachments :: InstrMdAttachments -> BlockList -> BlockList
 addInstrAttachments atts blocks = go 0 (Map.toList atts) (Seq.viewl blocks)
   where

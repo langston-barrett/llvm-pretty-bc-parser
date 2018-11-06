@@ -49,6 +49,7 @@ Library
                        Data.LLVM.BitCode.IR.Module,
                        Data.LLVM.BitCode.IR.Types,
                        Data.LLVM.BitCode.IR.Values,
+                       Data.LLVM.BitCode.Debug,
                        Data.LLVM.BitCode.Match,
                        Data.LLVM.BitCode.Parse,
                        Data.LLVM.BitCode.Record
@@ -67,6 +68,8 @@ Library
                        microlens     >= 0.4,
                        microlens-th  >= 0.4,
                        text          -any,
+                       wl-pprint     >= 1.2,
+                       validation    -any,
                        llvm-pretty   >= 0.7.3
 
 Executable llvm-disasm

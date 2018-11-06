@@ -17,7 +17,6 @@ import Control.Monad (unless,forM_)
 import Data.Monoid (mappend)
 import Data.Word (Word16)
 
-
 -- Module Parsing --------------------------------------------------------------
 
 -- | The magic number that identifies a @Bitstream@ structure as LLVM IR.

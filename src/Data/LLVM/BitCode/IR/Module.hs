@@ -10,6 +10,7 @@ import Data.LLVM.BitCode.IR.Constants
 import Data.LLVM.BitCode.IR.Function
 import Data.LLVM.BitCode.IR.Globals
 import Data.LLVM.BitCode.IR.Metadata
+import Data.LLVM.BitCode.IR.Metadata.Applicative (seqMapKeys)
 import Data.LLVM.BitCode.IR.Types
 import Data.LLVM.BitCode.IR.Values
 import Data.LLVM.BitCode.Match
@@ -26,17 +27,25 @@ import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
 import qualified Data.Traversable as T
 
+import Data.LLVM.BitCode.Debug
+import Data.Maybe (mapMaybe, catMaybes)
+import Control.Monad ((>=>), (<=<))
+import Debug.Trace
+
 
 -- Module Block Parsing --------------------------------------------------------
 
 data PartialModule = PartialModule
   { partialGlobalIx   :: !Int
   , partialGlobals    :: GlobalList
+  , partialGlobalAtt  :: PGlobalAttachments
+    -- ^ Metadata attached to global variables.
+    -- See 'addGlobalAttachments'.
   , partialDefines    :: DefineList
   , partialDeclares   :: DeclareList
   , partialDataLayout :: DataLayout
   , partialInlineAsm  :: InlineAsm
-  , partialComdat     :: Seq.Seq (String,SelectionKind)
+  , partialComdat     :: Seq.Seq (String, SelectionKind)
   , partialAliasIx    :: !Int
   , partialAliases    :: AliasList
   , partialNamedMd    :: [NamedMd]
@@ -49,6 +58,7 @@ emptyPartialModule :: PartialModule
 emptyPartialModule  = PartialModule
   { partialGlobalIx   = 0
   , partialGlobals    = mempty
+  , partialGlobalAtt  = mempty
   , partialDefines    = mempty
   , partialDeclares   = mempty
   , partialDataLayout = mempty
@@ -106,10 +116,24 @@ parseModuleBlock ents = label "MODULE_BLOCK" $ do
         Just es -> parseValueSymbolTableBlock es
         Nothing -> return emptyValueSymtab
 
+    valTab <- getValueTable
+    (namedMd, (globUnnamedMd, _), instrMdAttach, pFnMdAttach, pGlobalAttach) <-
+      trace ("Module blocks:\n" ++ show (ppBlocks ents)) $
+      -- trace ("Function blocks:\n" ++
+      --        show (mapMaybe (fmap catMaybes . fmap (map metadataBlockId) . functionBlockId) ents)) $
+      preparseMetadata valTab ents
+
     pm <- withValueSymtab symtab
         $ foldM parseModuleBlockEntry emptyPartialModule ents
 
-    finalizeModule pm
+    valTab' <- getValueTable
+
+    -- Update partial module with metadata attached to global variables
+    let pm' = pm { partialUnnamedMd = globUnnamedMd }
+
+    case addGlobalAttachments pGlobalAttach valTab' pm' of
+      Left err   -> fail err
+      Right pm'' -> finalizeModule pm''
 
 
 -- | Parse the entries in a module block.
@@ -134,12 +158,9 @@ parseModuleBlockEntry pm (moduleCodeFunction -> Just r) = do
   parseFunProto r pm
 
 parseModuleBlockEntry pm (functionBlockId -> Just es) = label "FUNCTION_BLOCK_ID" $ do
-  let unnamedGlobalsCount = length (partialUnnamedMd pm)
-  def <- parseFunctionBlock unnamedGlobalsCount es
-  let def' = def { partialGlobalMd = [] }
-  return pm { partialDefines = partialDefines pm Seq.|> def'
-            , partialUnnamedMd = partialGlobalMd def ++ partialUnnamedMd pm
-            }
+  let unnamedGlobalsCount    = length (partialUnnamedMd pm)
+  def <- trace "~~~~~~~~~functionBlockId" $ parseFunctionBlock unnamedGlobalsCount es
+  return pm { partialDefines = partialDefines pm Seq.|> def }
 
 parseModuleBlockEntry pm (paramattrBlockId -> Just _) = do
   -- PARAMATTR_BLOCK_ID
@@ -151,14 +172,9 @@ parseModuleBlockEntry pm (paramattrGroupBlockId -> Just _) = do
   -- TODO: skip for now
   return pm
 
-parseModuleBlockEntry pm (metadataBlockId -> Just es) = label "METADATA_BLOCK_ID" $ do
-  vt <- getValueTable
-  let globalsSoFar = length (partialUnnamedMd pm)
-  (ns,(gs,_),_,_,atts) <- parseMetadataBlock globalsSoFar vt es
-  return $ addGlobalAttachments atts pm
-    { partialNamedMd   = partialNamedMd   pm ++ ns
-    , partialUnnamedMd = partialUnnamedMd pm ++ gs
-    }
+parseModuleBlockEntry pm (metadataBlockId -> Just _) = label "METADATA_BLOCK_ID" $ do
+  -- We pre-parse metadata blocks. No need to do anything here.
+  return pm
 
 parseModuleBlockEntry pm (valueSymtabBlockId -> Just _es) = do
   -- VALUE_SYMTAB_BLOCK_ID
@@ -379,9 +395,27 @@ parseFunProto r pm = label "FUNCTION" $ do
      else return pm { partialDeclares = partialDeclares pm Seq.|> proto }
 
 
-addGlobalAttachments :: PGlobalAttachments -> (PartialModule -> PartialModule)
-addGlobalAttachments gs0 pm = pm { partialGlobals = go (partialGlobals pm) gs0 }
+-- | Take a 'PGlobalAttachments' (a map from symbols to some metadata), and
+-- attach metadata to the appropriate global variables.
+addGlobalAttachments :: PGlobalAttachments
+                     -> ValueTable
+                     -> PartialModule
+                     -> Either String PartialModule
+addGlobalAttachments gs0 valTab pm = do
+  fmap (\gs -> pm { partialGlobals = go (partialGlobals pm) gs })
+       (findGlobalSymbols gs0)
   where
+
+  -- First, map global IDs to their symbols
+  findGlobalSymbol valueId =
+    case lookupValueTableAbs valueId valTab of
+      Just Typed{ typedValue = ValSymbol sym } -> Right sym
+      _ -> Left $ unlines [ "Non-global referenced: " ++ show valueId
+                          , "Globals available: " ++
+                              show (Map.keysSet $ valueEntries valTab)
+                          ]
+
+  findGlobalSymbols = seqMapKeys . Map.mapKeys findGlobalSymbol
 
   go gs atts | Map.null atts = gs
 
@@ -390,6 +424,8 @@ addGlobalAttachments gs0 pm = pm { partialGlobals = go (partialGlobals pm) gs0 }
       Seq.EmptyL -> Seq.empty
 
       g Seq.:< gs' ->
+        -- If the label on this global matches a key in the map, then updte the
+        -- metadata attached to that global.
         let (mb,atts') = Map.updateLookupWithKey (\_ _ -> Nothing) (pgSym g) atts
          in case mb of
               Just md -> g { pgMd = md } Seq.<| go gs' atts'

@@ -12,11 +12,12 @@ Stability   : experimental
 -}
 
 module Data.LLVM.BitCode.IR.Metadata (
-    parseMetadataBlock
+    preparseMetadata
   , parseMetadataKindEntry
   , PartialUnnamedMd(..)
   , finalizePartialUnnamedMd
   , finalizePValMd
+  , addMetadataType
   , InstrMdAttachments
   , PFnMdAttachments
   , PKindMd
@@ -24,17 +25,23 @@ module Data.LLVM.BitCode.IR.Metadata (
   , ParsedMetadata
   ) where
 
-import           MonadLib
-import           MonadLib.Monads
+import qualified MonadLib as ML
+import qualified MonadLib.Monads as ML
 import           Lens.Micro
+import           Control.Arrow ((>>>))
 import           Control.Monad (foldM)
-import qualified Data.Map  as Map
+import qualified Data.Map as Map
+import           Data.Maybe (mapMaybe)
 import           Data.Text (unpack)
+import           Data.Validation
 
 import           Text.LLVM.AST
 
 import           Data.LLVM.BitCode.Bitstream (Entry)
 import           Data.LLVM.BitCode.Parse
+
+import           Data.LLVM.BitCode.Match ((|||))
+import qualified Data.LLVM.BitCode.IR.Blocks as Blk
 
 import           Data.LLVM.BitCode.IR.Metadata.Applicative
 import           Data.LLVM.BitCode.IR.Metadata.Finalize
@@ -42,88 +49,86 @@ import           Data.LLVM.BitCode.IR.Metadata.Parse
 import           Data.LLVM.BitCode.IR.Metadata.Resolve
 import           Data.LLVM.BitCode.IR.Metadata.Table
 
-type ParsedMetadata f =
+import Debug.Trace
+
+type ParsedMetadata =
   ( [NamedMd]
-  , ([f (Maybe PartialUnnamedMd)], [f (Maybe PartialUnnamedMd)])
+  , ([PartialUnnamedMd], [PartialUnnamedMd])
   , InstrMdAttachments
   , PFnMdAttachments
   , PGlobalAttachments
   )
 
--- | This is the entrypoint parsing a metadata block, it is called from e.g.
--- 'parseModule'.
-parseMetadataBlock :: forall f. Applicative f
-                   => Int {- ^ globals seen so far -}
-                   -> ValueTable
-                   -> [Entry]
-                   -> Parse (ParsedMetadata f)
-parseMetadataBlock globals vt entries = label "METADATA_BLOCK" $ do
+-- | Find and parse metadata blocks, resolving cross-references among them.
+preparseMetadata :: ValueTable
+                 -> [Entry]
+                 -> Parse ParsedMetadata
+preparseMetadata valTab entries =
+  -- First, we filter into any entries that contain metadata blocks.
+  let fnMatch = Blk.functionBlockId
+              >>> fmap (mapMaybe (Blk.metadataBlockId ||| Blk.metadataAttachmentBlockId))
+              >>> fmap concat
+      mdEntries =
+        concat $ mapMaybe Blk.metadataBlockId entries ++
+                 mapMaybe fnMatch entries
+  in label "METADATA_BLOCK" $ do
 
-  -- Prepare the initial metadata table
-  mdt <- getMdTable
-  let mdt' = mdt { valueEntries = Map.map pure $ valueEntries mdt }
-  let pm0  = emptyPartialMetadata globals mdt'
+    -- Prepare the initial metadata table
+    mdt <- getMdTable
+    let mdt' = mdt { valueEntries = Map.map pure $ valueEntries mdt }
+    let pm0  = emptyPartialMetadata 0 mdt'
 
-  -- Fold across all the entries
-  pm <- foldM (\pm -> parseMetadataEntry vt (pm ^. pmEntries) pm) pm0 entries
+    -- The accumulator for this fold is the intermediate state of metadata
+    -- parsing, consisting of
+    -- 1. The number of unnamed metadata seen so far (implicit IDs)
+    -- 2. The 'PartialMetadata' structure
+    pm <- foldM (\pm -> parseMetadataEntry valTab (pm ^. pmEntries) pm) pm0 mdEntries
 
-  -- In the 'Writer Text/State (Map k v)' monad
-  let ((vte', pga', pne'), log) =
-        fst . runState Map.empty . runWriterT $ do
+    -- Now, we resolve references among metadata.
 
-          -- Resolve references in the 'MetadataTable'
-          vte' <- resolveAll' (valueEntries $ pm ^. pmEntries . mtEntries)
+    -- In the 'Writer Text/State (Map k v)' monad
+    let (t@(vte', namedGlobals', unnamedGlobals', instrAtt', fnAtt', globAtt'), log) =
+          fst . ML.runState Map.empty . ML.runWriterT $ do
 
-          -- Resolve other references in the partial metadata
-          pga' <- resolveAll  (pm ^. pmGlobalAttachments)
-          pne' <- resolveAll  (pm ^. pmNamedEntries)
+            -- Resolve references in the 'MetadataTable'
+            vte' <- resolveAll (valueEntries $ pm ^. pmEntries . mtEntries)
 
-          pure (vte', pga', pne')
+            -- Resolve other references in the partial metadata
+            -- With certain of these, the applicative effect is nested pretty
+            -- deeply, so we need to bring it up a few levels
+            -- (e.g. 'pmInstrAttachments').
+            namedGlobals'   <- resolveAllList $ namedEntries pm
+            unnamedGlobals' <- resolveOne $
+              (\(a, b) -> tupleA2 (sequenceA a, sequenceA b)) (unnamedEntries pm)
+            instrAtt'       <- resolveAllMap $
+              traverse (\(a, b) -> tupleA2 (pure a, b)) <$>
+                (pm ^. pmInstrAttachments)
+            fnAtt'          <- resolveAllMap (pm ^. pmFnAttachments)
+            globAtt'        <- resolveAllMap $ seqMap <$> pm ^. pmGlobalAttachments
 
-  case (vte', pga', pne') of
-    (Right vte, Right pga, Right pne) ->
-      -- Merge the updated references
-      let vt = pm ^. pmEntries . mtEntries
-          vt' :: ValueTable' PValMd
-          vt' = ValueTable { valueNextId   = valueNextId vt
-                           , valueEntries  = vte
-                           , strtabEntries = strtabEntries vt
-                           , valueRelIds   = valueRelIds vt
-                           }
+            pure (vte', namedGlobals', unnamedGlobals', instrAtt', fnAtt', globAtt')
 
-          mt' :: MetadataTable' Id
-          mt' = MetadataTable { _mtEntries  = pure <$> vt'
-                              , _mtNodes    = pm ^. pmEntries . mtNodes
-                              , _mtNextNode = pm ^. pmEntries . mtNextNode
-                              }
+    case t of
+      ( Success vte, Success namedGlobals, Success unnamedGlobals
+        , Success fnAtt, Success instrAtt, Success globAtt) ->
+        do -- Update the parser's state with the new metadata table
+           setMdTable $ (pm ^. pmEntries . mtEntries) { valueEntries  = vte }
+           pure (namedGlobals, unnamedGlobals, fnAtt, instrAtt, globAtt)
 
-          -- Map.map (Typed (PrimType Metadata) . ValMd)
-          pm' :: PartialMetadata Id
-          pm' = PartialMetadata { _pmEntries           = mt'
-                                , _pmNamedEntries      = pure <$> pne
-                                , _pmGlobalAttachments = pure <$> pga
-                                , _pmNextName          = pm ^. pmNextName
-                                , _pmInstrAttachments  = pm ^. pmInstrAttachments
-                                , _pmFnAttachments     = pm ^. pmFnAttachments
-                                }
-      in pure $ runId $ (,,,,)
-           <$> namedEntries pm'
-           <*> pure   (unnamedEntries pm')
-           <*> pure   (pm' ^. pmInstrAttachments)
-           <*> pure   (pm' ^. pmFnAttachments)
-           <*> seqMap (pm' ^. pmGlobalAttachments)
-
-    _ -> fail $ unlines $
-           [ "Metadata block contained some unresolvable entries."
-           , "This is usually a result of an internal error."
-           , "Here are the (referencer, referencee) pairs"
-           , "(list may be incomplete):"
-           , concat . concat $
-               let foo :: Show a => Either a b -> [String]
-                   foo = either ((:[]) . show) (const [])
-               in [ foo vte'
-                  , foo pga'
-                  , foo pne'
-                  ]
-           , "\nAnd here is a log: "
-           ] ++ map unpack log
+      _ -> fail $ unlines $
+            [ "Metadata block contained some unresolvable entries."
+            , "This is usually a result of an internal error."
+            , "Here are the (referencer, referencee) pairs"
+            , "(list may be incomplete):"
+            , concat . concat $
+                let mkErr :: Show a => Validation a c -> [String]
+                    mkErr = validation ((:[]) . (++"\n") . show) (const [])
+                in [ mkErr vte'
+                   , mkErr namedGlobals'
+                   , mkErr unnamedGlobals'
+                   , mkErr instrAtt'
+                   , mkErr fnAtt'
+                   , mkErr globAtt'
+                   ]
+            , "\nAnd here is a log: "
+            ] ++ map unpack log

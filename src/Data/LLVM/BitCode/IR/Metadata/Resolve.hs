@@ -32,6 +32,8 @@ import qualified Data.Map as Map
 import           Data.Map (Map)
 import           MonadLib
 import           MonadLib.Monads
+import           Data.Validation (Validation(..), fromEither, toEither)
+import           Lens.Micro
 
 import           Data.LLVM.BitCode.IR.Metadata.Lookup
 
@@ -73,16 +75,50 @@ lookupStateExcept i = do
 -- | Our concrete applicative stack, used to instantiate 'lookupStateExcept'
 type SEW k v = ExceptionT k (StateT (Map k v) (Writer [Text]))
 
-runSEW :: SEW k v a -> Map k v -> (Either k a, Map k v, [Text])
+runSEW :: SEW k v a -> Map k v -> (Validation k a, Map k v, [Text])
 runSEW sew m =
   let ((x, y), z) = runWriter $ runStateT m $ runExceptionT sew
-  in (x, y, z)
+  in (fromEither x, y, z)
 
 
 -- type StateExceptT s e m    = StateT s (ExceptionT e m)
 -- type StateExcept  s e      = StateExceptT s e Id
 -- type StateExceptMapT k v f = StateExceptT (Map k v) k f
 -- type StateExceptMap k v    = StateExcept (Map k v) k
+
+resolveOne :: forall m k v a. ( Show k           -- Logging
+                              , Show v           -- Logging
+                              , Show a           -- Logging
+                              , WriterM m [Text] -- Logging
+                              , Ord k            -- Map
+                              , StateM m (Map k v)
+                              )
+            => Lookup (SEW k v) k v a
+            -> m (Validation k a)
+resolveOne sev =
+  let -- First, feed lookupStateExcept through the reader.
+      sev' :: SEW k v a
+      sev' = runReader lookupStateExcept . getCompose $ sev
+  in do
+    st <- get
+    -- Run the value with the current state.
+
+    let (result, newState, log_) = runSEW sev' st
+    sets_ (Map.union newState)
+
+    case result of
+      -- If it raised an exception, just feed that on through.
+      Failure i  -> do
+        tell log_
+        pure $ Failure i
+      -- Otherwise, merge any updated state (resolved references),
+      Success v -> do
+        tell [ "Resolved all references in node: "
+              , Text.pack (show v)
+              ]
+        sets_ (Map.union newState)
+        -- And pass the rest on through.
+        pure $ Success v
 
 -- | Take a 'Traversable' containing values that need an "effectful lookup
 -- table". Pass it 'lookupStateExcept' and run it with the current state. If it
@@ -96,46 +132,26 @@ resolveSome :: forall m k v f a. ( Show k           -- Logging
                                  , StateM m (Map k v)
                                  )
             => f (Lookup (SEW k v) k v a)
-            -> m (f (Either k a))
-resolveSome fun =
-  let -- First, feed lookupStateExcept through all the readers.
-      mp' :: f (SEW k v a)
-      mp' = fmap (runReader lookupStateExcept . getCompose) fun
-  in -- For each monadic value,
-     forM mp' $ \sev -> do -- sev: "state-except value"
+            -> m (f (Validation k a))
+resolveSome = traverse resolveOne
 
-      st <- get
-      -- Run the value with the current state.
+-- | An analogue of Map.mapEither
+mapValidation :: Map a (Validation b c) -> (Map a b, Map a c)
+mapValidation = Map.mapEither id . fmap toEither
 
-      let (result, newState, log_) = runSEW sev st
-      sets_ (Map.union newState)
-
-      case result of
-        -- If it raised an exception, just feed that on through.
-        Left i  -> do
-          tell log_
-          pure $ Left i
-        -- Otherwise, merge any updated state (resolved references),
-        Right v -> do
-          tell [ "Resolved all references in node: "
-               , Text.pack (show v)
-               ]
-          sets_ (Map.union newState)
-          -- And pass the rest on through.
-          pure $ Right v
-
--- | A version of 'resolveAll' that updates the state with intermediate results.
-resolveAll' :: forall m k v. ( Show k           -- Logging
-                             , Show v           -- Logging
-                             , WriterM m [Text] -- Logging
-                             , Ord k            -- Map
-                             , StateM m (Map k v)
-                             )
-            => Map k (Lookup (SEW k v) k v v)
-            -> m (Either [(k, k)] (Map k v))
-resolveAll' mp = do
-
-  (lefts, rights) <- Map.mapEither id <$> resolveSome mp
+-- | Run 'resolveSome' and update the state with intermediate results.
+--
+-- This is the only place where the state can be added to.
+resolveAll :: forall m k v. ( Show k           -- Logging
+                            , Show v           -- Logging
+                            , WriterM m [Text] -- Logging
+                            , Ord k            -- Map
+                            , StateM m (Map k v)
+                            )
+           => Map k (Lookup (SEW k v) k v v)
+           -> m (Validation [(k, k)] (Map k v))
+resolveAll mp = do
+  (lefts, rights) <- mapValidation <$> resolveSome mp
 
   -- Take the resolved references and add them to the state.
   sets_ (Map.union rights)
@@ -145,37 +161,52 @@ resolveAll' mp = do
   -- resolution, it returns the current 'lefts'.
   if   not $ Set.null $ Set.difference (Set.fromList $ Map.elems lefts) (Map.keysSet mp)
   then do
-    tell [ "The state has the following keys:"
-         , Text.pack $ show (Set.toList $ Map.keysSet mp)
-         , "However, I need the following references:"
+    tell [ "Metadata contain the following references:"
          , Text.pack $ show (Map.elems lefts)
+         , "However, the AST contains only the following keys:"
+         , Text.pack $ show (Set.toList $ Map.keysSet mp)
          ]
-    pure $ Left (Map.toList lefts)
+    pure $ Failure (Map.toList lefts)
   else
     if   Map.size lefts == 0 -- If everything was resolved,
-    then Right <$> get       -- then we're done, and the state holds the results.
+    then Success <$> get     -- then we're done, and the state holds the results.
     else do
-     tell ["resolveAll': recursing"]
-     resolveAll' mp      -- Otherwise, repeat with new state
+     tell ["[DEBUG] resolveAll': recursing"]
+     resolveAll mp      -- Otherwise, repeat with new state
 
 -- | Call 'resolveSome' and hope all the references are in the state.
 --
 -- If some node @a@ references a node @b@ which doesn't appear in the state (due
 -- to an implementation error in the parser or malformed input), then this
 -- @Left s@ where @s@ contains @(a, b)@.
-resolveAll :: forall m k v k' v'. ( Show k           -- Logging
-                                  , Show k'          -- Logging
+resolveAllMap :: forall m k v k' v'. ( Show k           -- Logging
+                                     , Show k'          -- Logging
+                                     , Show v           -- Logging
+                                     , Show v'          -- Logging
+                                     , WriterM m [Text] -- Logging
+                                     , Ord k            -- Map
+                                     , Ord k'           -- Map
+                                     , StateM m (Map k v)
+                                     )
+           => Map k' (Lookup (SEW k v) k v v')
+           -> m (Validation [(k', k)] (Map k' v'))
+resolveAllMap mp = do
+  (lefts, rights) <- mapValidation <$> resolveSome mp
+  pure $ if   not     (Map.null lefts)
+         then Failure (Map.toList lefts)
+         else Success rights
+
+resolveAllList :: forall m k v a. ( Show k           -- Logging
                                   , Show v           -- Logging
-                                  , Show v'          -- Logging
+                                  , Show a           -- Logging
                                   , WriterM m [Text] -- Logging
                                   , Ord k            -- Map
-                                  , Ord k'           -- Map
                                   , StateM m (Map k v)
                                   )
-           => Map k' (Lookup (SEW k v) k v v')
-           -> m (Either [(k', k)] (Map k' v'))
-resolveAll mp = do
-  (lefts, rights) <- Map.mapEither id <$> resolveSome mp
-  pure $ if   not (Map.null lefts)
-         then Left (Map.toList lefts)
-         else Right rights
+               => [Lookup (SEW k v) k v a]
+               -> m (Validation [k] [a])
+resolveAllList l =
+  -- We can use 'sequenceA' because of the behavior of 'Validation'
+  traverse singletonLeft <$> resolveSome l
+  where singletonLeft (Failure  left) = Failure  [left]
+        singletonLeft (Success right) = Success right

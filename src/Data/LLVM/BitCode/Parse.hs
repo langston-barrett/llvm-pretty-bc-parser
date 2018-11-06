@@ -336,7 +336,7 @@ lookupValue n = lookupValueTable n `fmap` getValueTable
 -- | Lookup lazily, hiding an error in the result if the entry doesn't exist by
 -- the time it's needed.  NOTE: This always looks up an absolute index, never a
 -- relative one.
-forwardRef :: [String] -> Int -> ValueTable -> Typed PValue
+forwardRef :: [String] -> Int -> ValueTable' a -> a
 forwardRef cxt n vt =
   fromMaybe (X.throw (BadValueRef cxt n)) (lookupValueTableAbs n vt)
 
@@ -380,8 +380,9 @@ fixValueTable_ k = fixValueTable $ \ vt -> do
 
 type PValMd = ValMd' Int
 
+type MdTable' a = ValueTable' a
 type MdTable    = ValueTable' PValMd
-type MdTable' f = ValueTable' (f PValMd)
+type MdTableF f = ValueTable' (f PValMd)
 
 getMdTable :: Parse MdTable
 getMdTable  = Parse (psMdTable <$> get)
@@ -671,7 +672,11 @@ getKind kind = Parse $ do
   let KindTable { .. } = psKinds ps
   case Map.lookup kind ktNames of
     Just name -> return name
-    Nothing   -> fail ("Unknown kind id: " ++ show kind ++ "\nKind table: " ++ show (psKinds ps))
+    Nothing   -> return "dummy kind" -- TODO
+    -- Nothing   -> fail . unlines $
+    --   [ "Unknown kind id: " ++ show kind
+    --   , "Kind table: " ++ show (psKinds ps)
+    --   ]
 
 -- Partial Symbols -------------------------------------------------------------
 

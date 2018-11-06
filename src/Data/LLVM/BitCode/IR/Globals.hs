@@ -87,11 +87,11 @@ finalizeGlobal pg = case pgValueIx pg of
   where
   mkGlobal mval =
     do md <- mapM (relabel (const requireBbEntryName)) (pgMd pg)
-       return Global { globalSym   = pgSym pg
-                     , globalAttrs = pgAttrs pg
-                     , globalType  = pgType pg
-                     , globalValue = mval
-                     , globalAlign = pgAlign pg
+       return Global { globalSym      = pgSym pg
+                     , globalAttrs    = pgAttrs pg
+                     , globalType     = pgType pg
+                     , globalValue    = mval
+                     , globalAlign    = pgAlign pg
                      , globalMetadata = md
                      }
 

@@ -41,6 +41,8 @@ import           Data.Map (Map)
 import           Data.LLVM.BitCode.IR.Metadata.Applicative
 import           Data.LLVM.BitCode.IR.Metadata.Table
 
+import Debug.Trace
+
 -- Metadata Parsing ------------------------------------------------------------
 
 -- | Parse an entry in the metadata block.
@@ -50,7 +52,7 @@ import           Data.LLVM.BitCode.IR.Metadata.Table
 -- to not have to rely on it.
 parseMetadataEntry :: forall f. Applicative f
                    => ValueTable
-                   -> MetadataTable'  (LookupMd f)
+                   -> MetadataTableF  (LookupMd f)
                    -- ^ TODO: Should this be refactored out?
                    -> PartialMetadata (LookupMd f)
                    -> Entry
@@ -132,11 +134,11 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       (fail "Invalid record")
     if recordSize `mod` 2 == 0
     then label "function attachment" $ do
-      att <- Map.fromList <$> parseAttachment r 0
+      att <- Map.fromList <$> parseAttachment mt r 0
       return $! addFnAttachment att pm
     else label "instruction attachment" $ do
       inst <- parseField r 0 numeric
-      patt <- parseAttachment r 1
+      patt <- parseAttachment mt r 1
       att <- mapM (\(k,md) -> (,md) <$> getKind k) patt
       return $! addInstrAttachment inst att pm
 
@@ -536,12 +538,9 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
          (fail "Invalid record")
 
     valueId <- parseField r 0 numeric
-    sym     <- case lookupValueTableAbs valueId vt of
-                 Just Typed{ typedValue = ValSymbol sym } -> pure sym
-                 _ -> fail "Non-global referenced"
+    refs    <- parseGlobalObjectAttachment mt r
+    return $! addGlobalAttachmentsA valueId refs pm
 
-    refs <- parseGlobalObjectAttachment mt r
-    return $! addGlobalAttachmentsA sym refs pm
 
   37 -> label "METADATA_GLOBAL_VAR_EXPR" $ do
     when (length (recordFields r) /= 3)
@@ -580,40 +579,40 @@ parseMetadataEntry _ _ pm (abbrevDef -> Just _) =
 parseMetadataEntry _ _ _ r =
   fail ("unexpected metadata entry: " ++ show r)
 
-parseAttachment :: Record -> Int -> Parse [(PKindMd,PValMd)]
-parseAttachment r l = loop (length (recordFields r) - 1) []
+parseAttachment :: Applicative f
+                => MetadataTableF (LookupMd f)
+                -> Record
+                -> Int
+                -> Parse [(PKindMd, LookupMd f PValMd)]
+parseAttachment mt r l = loop (length (recordFields r) - 1) []
   where
   loop n acc | n < l = return acc
              | otherwise = do
     kind <- parseField r (n - 1) numeric
-    md   <- getMetadata =<< parseField r n numeric
+    md   <- mdForwardRef mt <$> parseField r n numeric
     loop (n - 2) ((kind, md) : acc)
-
 
 -- | This is a named version of the metadata list that can show up at the end of
 -- a global declaration. It will be of the form @!dbg !2 [!dbg !n, ...]@.
 parseGlobalObjectAttachment :: Applicative f
-                            => MetadataTable' (LookupMd f)
+                            => MetadataTableF (LookupMd f)
                             -> Record
-                            -> Parse ((LookupMd f) (Map KindMd PValMd))
+                            -> Parse (Map KindMd (LookupMd f PValMd))
 parseGlobalObjectAttachment mt r = label "parseGlobalObjectAttachment" $
   do cxt <- getContext
-     go cxt (pure Map.empty) 1
+     go cxt Map.empty 1
   where
   len = length (recordFields r)
-
-  go cxt acc n | n < len =
-    do kind <- getKind =<< parseField r n numeric
-       i    <- parseField r (n + 1) numeric
-       go cxt (Map.insert kind <$> mdForwardRef mt i <*> acc) (n + 2)
-
+  go cxt acc n | n < len = do
+    kind <- getKind =<< parseField r n numeric
+    i    <- parseField r (n + 1) numeric
+    go cxt (Map.insert kind (mdForwardRef mt i) acc) (n + 2)
   go _ acc _ = pure acc
-
 
 -- | Parse a metadata node.
 parseMetadataNode :: Applicative f
                   => Bool
-                  -> MetadataTable' (LookupMd f)
+                  -> MetadataTableF (LookupMd f)
                   -> Record
                   -> PartialMetadata (LookupMd f)
                   -> Parse (PartialMetadata (LookupMd f))
@@ -628,7 +627,7 @@ parseMetadataNode isDistinct mt r pm = do
 parseMetadataOldNode :: forall f. Applicative f
                      => Bool
                      -> ValueTable
-                     -> MetadataTable' (LookupMd f)
+                     -> MetadataTableF (LookupMd f)
                      -> Record
                      -> PartialMetadata (LookupMd f)
                      -> Parse (PartialMetadata (LookupMd f))
