@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-|
 Module      : Data.LLVM.BitCode.IR.Metadata.Resolve
@@ -23,12 +24,12 @@ zeroCtr :: Counter
 zeroCtr = initCtr 0
 
 incCtr :: Counter -> Counter
-incCtr (Counter (soFar, total)) = Counter (soFar + 1, total)
+incCtr (Counter (!soFar, !total)) = Counter (soFar + 1, total)
 
 -- setCtr :: (Int, Int) -> Counter -> Counter
 -- setCtr (a, b) _ = Counter (a, b)
 
 ppCtr :: Counter -> Text
-ppCtr (Counter (soFar, total)) =
+ppCtr (Counter (!soFar, !total)) =
   Text.concat ["(", ts soFar, ", ", ts total, ")"]
   where ts = Text.pack . show

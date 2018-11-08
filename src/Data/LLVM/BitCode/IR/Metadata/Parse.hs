@@ -35,8 +35,8 @@ import           Data.Bits (shiftR, testBit, shiftL)
 import           Data.Word (Word32,Word64)
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as Char8 (unpack)
-import qualified Data.Map as Map
-import           Data.Map (Map)
+import qualified Data.Map.Strict as Map
+import           Data.Map.Strict (Map)
 
 import           Data.LLVM.BitCode.IR.Metadata.Applicative
 import           Data.LLVM.BitCode.IR.Metadata.Table
@@ -123,7 +123,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
 
   -- [n x mdnodes]
   10 -> label "METADATA_NAMED_NODE" $ do
-    mdIds <- parseFields r 0 numeric
+    mdIds <- trace "Adding named node" $ parseFields r 0 numeric
     cxt   <- getContext
     nameMetadataA (traverse (mdNodeRef cxt mt) mdIds) pm
 

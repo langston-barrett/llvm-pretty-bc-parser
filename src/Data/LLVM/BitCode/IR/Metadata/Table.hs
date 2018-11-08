@@ -3,6 +3,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-|
 Module      : Data.LLVM.BitCode.IR.Metadata.Table
@@ -27,7 +28,7 @@ import           Control.Monad (guard)
 import           Lens.Micro hiding (ix)
 import           Lens.Micro.TH
 import qualified Control.Exception as X
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 
 import           Data.LLVM.BitCode.IR.Metadata.Applicative
 import           Data.LLVM.BitCode.IR.Metadata.Lookup
@@ -124,7 +125,7 @@ addOldNode fnLocal vals = addNameNode vals (ValMdNode . map (Just . ValMdValue))
 
 -- *** Forward references
 
--- | Either (1) find a value in the 'mtNodes' and return its TODO,
+-- | Either (1) find a value in the 'mtNodes' and return its ID,
 --   or use a forward reference to the value.
 mdForwardRef :: (Applicative f)
              => MetadataTableF (LookupMd f)
@@ -135,6 +136,17 @@ mdForwardRef mt ix =
     Just x  -> pure $ thd x
     Nothing -> lookup ix
   where thd (_, _, r) = ValMdRef r -- "third"
+
+-- | The same as 'mdForwardRef', but it doesn't wrap the value in a 'ValMdRef'
+mdNodeRef :: Applicative f => [String] -> MetadataTableF (LookupMd f) -> Int -> LookupMd f Int
+mdNodeRef cxt mt ix =
+  case Map.lookup ix (mt ^. mtNodes) of
+    Just x  -> pure $ thd x
+    Nothing -> flip fmap (lookup ix) $
+      \case
+        ValMdRef i -> i
+        _          -> X.throw (BadValueRef cxt ix) -- TODO: better error messages
+  where thd (_, _, z) = z
 
 mdForwardRefOrNull :: (Applicative f)
                    => MetadataTableF (LookupMd f)
@@ -150,13 +162,6 @@ mdForwardRefOrNull' :: (Applicative f)
                     -> LookupMd f (Maybe PValMd)
 mdForwardRefOrNull' mt = commuteMaybe . mdForwardRefOrNull mt
 
-mdNodeRef :: Applicative f => [String] -> MetadataTableF f -> Int -> f Int
-mdNodeRef cxt mt ix =
-  case Map.lookup ix (mt ^. mtNodes) of
-    Just x  -> pure $ thd x
-    Nothing -> X.throw (BadValueRef cxt ix) -- TODO: better error messages
-  where thd (_, _, z) = z
-
 mdString :: Applicative f
          => [String]
          -> MetadataTableF (LookupMd f)
@@ -165,7 +170,7 @@ mdString :: Applicative f
 mdString cxt mt ix =
   case mdStringOrNull cxt mt ix of
     Just str -> str
-    Nothing  -> X.throw (BadValueRef cxt ix)
+    Nothing  -> X.throw (NotAString cxt ix)
 
 mdStringOrNull :: Applicative f
                => [String]
@@ -252,8 +257,8 @@ addInstrAttachment :: Applicative f
                    -> PartialMetadata f
 addInstrAttachment instr md = pmInstrAttachments %~ Map.insert instr md
 
-nameMetadataA :: Applicative m
-              => m [Int] -> PartialMetadata m -> Parse (PartialMetadata m)
+nameMetadataA :: Applicative f
+              => f [Int] -> PartialMetadata f -> Parse (PartialMetadata f)
 nameMetadataA val pm = case pm ^. pmNextName  of
   Just name ->
     return $! pm & pmNextName     .~ Nothing

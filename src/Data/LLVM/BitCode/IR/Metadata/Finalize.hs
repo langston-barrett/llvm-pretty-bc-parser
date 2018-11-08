@@ -20,8 +20,8 @@ import           Data.Either (partitionEithers)
 import           Data.Maybe (mapMaybe)
 import           Control.Arrow ((>>>))
 import           Lens.Micro hiding (ix)
-import qualified Data.Map as Map
-import           Data.Map (Map)
+import qualified Data.Map.Strict as Map
+import           Data.Map.Strict (Map)
 
 import           Data.LLVM.BitCode.Parse
 import           Text.LLVM.AST

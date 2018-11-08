@@ -23,7 +23,7 @@ import Control.Monad (foldM,guard,when,forM_)
 import Data.List (sortBy)
 import Data.Ord (comparing)
 import qualified Data.Foldable as F
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq
 import qualified Data.Traversable as T
 
@@ -126,10 +126,12 @@ parseModuleBlock ents = label "MODULE_BLOCK" $ do
     pm <- withValueSymtab symtab
         $ foldM parseModuleBlockEntry emptyPartialModule ents
 
-    valTab' <- getValueTable
+    valTab' <- trace "aaag (4)" $ getValueTable
 
     -- Update partial module with metadata attached to global variables
-    let pm' = pm { partialUnnamedMd = globUnnamedMd }
+    let pm' = pm { partialUnnamedMd = partialUnnamedMd pm ++ globUnnamedMd
+                 , partialNamedMd   = partialNamedMd   pm ++ namedMd
+                 }
 
     case addGlobalAttachments pGlobalAttach valTab' pm' of
       Left err   -> fail err
@@ -401,7 +403,7 @@ addGlobalAttachments :: PGlobalAttachments
                      -> ValueTable
                      -> PartialModule
                      -> Either String PartialModule
-addGlobalAttachments gs0 valTab pm = do
+addGlobalAttachments gs0 valTab pm =
   fmap (\gs -> pm { partialGlobals = go (partialGlobals pm) gs })
        (findGlobalSymbols gs0)
   where

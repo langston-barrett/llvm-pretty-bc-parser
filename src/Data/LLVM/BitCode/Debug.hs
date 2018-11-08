@@ -19,8 +19,8 @@ import           Text.PrettyPrint.Leijen ((<$$>), (<+>), text)
 import qualified Text.LLVM.PP as LLVMPP
 
 import           Data.LLVM.BitCode.Parse
-import qualified Data.Map as Map
-import           Data.Map (Map)
+import qualified Data.Map.Strict as Map
+import           Data.Map.Strict (Map)
 import           Data.Maybe (maybe, mapMaybe)
 
 -- formatError :: Error -> String

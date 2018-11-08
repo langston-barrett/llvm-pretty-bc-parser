@@ -41,6 +41,7 @@ Library
                        Data.LLVM.BitCode.IR.Globals,
                        Data.LLVM.BitCode.IR.Metadata,
                        Data.LLVM.BitCode.IR.Metadata.Applicative,
+                       Data.LLVM.BitCode.IR.Metadata.Counter,
                        Data.LLVM.BitCode.IR.Metadata.Finalize,
                        Data.LLVM.BitCode.IR.Metadata.Parse,
                        Data.LLVM.BitCode.IR.Metadata.Table,
@@ -54,7 +55,7 @@ Library
                        Data.LLVM.BitCode.Parse,
                        Data.LLVM.BitCode.Record
 
-  Ghc-options:         -Wall
+  Ghc-options:         -Wall -O0 -fno-ignore-asserts
 
   Build-depends:       base          >= 4 && < 5,
                        containers    >= 0.4,
@@ -89,6 +90,8 @@ Executable llvm-disasm
                        llvm-pretty>= 0.7.3,
                        pretty-show>= 1.6,
                        llvm-pretty-bc-parser
+
+  Ghc-options:         -Wall -O0 -fno-ignore-asserts
 
 Test-suite disasm-test
   type:                exitcode-stdio-1.0
