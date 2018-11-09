@@ -18,6 +18,7 @@ module Data.LLVM.BitCode.IR.Metadata.Finalize where
 
 import           Data.Either (partitionEithers)
 import           Data.Maybe (mapMaybe)
+import           Data.List
 import           Control.Arrow ((>>>))
 import           Lens.Micro hiding (ix)
 import qualified Data.Map.Strict as Map
@@ -28,6 +29,8 @@ import           Text.LLVM.AST
 import           Text.LLVM.Labels (relabel)
 
 import           Data.LLVM.BitCode.IR.Metadata.Table
+
+import           Debug.Trace
 
 -- ** Finalizing names
 
@@ -61,9 +64,14 @@ namedEntries =
 unnamedEntries :: forall f. (Applicative f)
                => PartialMetadata f
                -> ([f PartialUnnamedMd], [f PartialUnnamedMd])
-unnamedEntries pm =
-  partitionEithers . mapMaybe (resolveNode (valueEntries $ pm ^. pmEntries . mtEntries)) $
-    Map.toList $ pm ^. pmEntries . mtNodes
+unnamedEntries pm = trace "unnamedEntries:" $
+  let xx = mapMaybe (resolveNode (valueEntries $ pm ^. pmEntries . mtEntries)) $
+        Map.toList $ pm ^. pmEntries . mtNodes
+      yy = partitionEithers xx
+  in flip trace yy $ intercalate "," $ flip map xx $ \x ->
+    case x of
+      Left _  -> "Left"
+      Right _ -> "Right"
   where
     -- TODO: is this silently eating errors with metadata that's not in the
     -- value table (by passing along the 'Nothing' from the Map lookup)?
@@ -71,12 +79,15 @@ unnamedEntries pm =
                 -> (Int, (Bool, Bool, Int))     -- ^ mtNodes
                 -> Maybe (Either (f PartialUnnamedMd) (f PartialUnnamedMd))
     resolveNode entries (ref, (fnLocal, isDistinct, ix)) =
+      trace ("mtEntries: " ++ show (Map.keysSet entries)) $
+      trace ("entry: " ++ show ref) $
       flip fmap (Map.lookup ref entries) $ \val ->
-        (if fnLocal then Left else Right)
+        (if trace ("isFnLocal: " ++ show fnLocal) $ fnLocal then Right else Left)
           (mkPartialUnnamedMd ix isDistinct <$> val)
 
     mkPartialUnnamedMd :: Int -> Bool -> PValMd -> PartialUnnamedMd
     mkPartialUnnamedMd ix d v =
+      trace ("mkPartialUnnamedMd: " ++ show d) $
       PartialUnnamedMd
         { pumIndex    = ix
         , pumValues   = v

@@ -25,7 +25,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq
 
-import Prelude
+import Debug.Trace
 
 
 -- Error Collection Parser -----------------------------------------------------
@@ -341,7 +341,7 @@ lookupValue n = lookupValueTable n `fmap` getValueTable
 -- the time it's needed.  NOTE: This always looks up an absolute index, never a
 -- relative one.
 forwardRef :: [String] -> Int -> ValueTable' a -> a
-forwardRef cxt n vt =
+forwardRef cxt n vt = trace "forwardRef" $
   fromMaybe (X.throw (BadValueRef cxt n)) (lookupValueTableAbs n vt)
 
 -- | Require that a value be present.
