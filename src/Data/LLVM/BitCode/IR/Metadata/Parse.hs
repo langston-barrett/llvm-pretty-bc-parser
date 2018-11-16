@@ -76,11 +76,11 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
          (fail "invalid record")
 
     cxt <- getContext
-    ix  <- field 1 numeric
-    let tv = forwardRef cxt ix vt
+    ix  <- trace "!!! here" $ field 1 numeric
+    let tv = trace "~~~ here" $ forwardRef cxt ix vt
 
-    return $! pm &  pmEntries            -- Get the metadatatable
-                 %~ addMdValue (pure tv) -- Add a value to it
+    return $ pm &  pmEntries            -- Get the metadatatable
+                %~ addMdValue (pure tv) -- Add a value to it
 
   -- [n x md num]
   3 -> label "METADATA_NODE" (parseMetadataNode False mt r pm)
@@ -123,7 +123,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
 
   -- [n x mdnodes]
   10 -> label "METADATA_NAMED_NODE" $ do
-    mdIds <- trace "Adding named node" $ parseFields r 0 numeric
+    mdIds <- parseFields r 0 numeric
     cxt   <- getContext
     nameMetadataA (traverse (mdNodeRef cxt mt) mdIds) pm
 

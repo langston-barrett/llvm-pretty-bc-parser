@@ -33,6 +33,8 @@ import qualified Data.Map.Strict as Map
 import           Data.LLVM.BitCode.IR.Metadata.Applicative
 import           Data.LLVM.BitCode.IR.Metadata.Lookup
 
+import Debug.Trace
+
 -- ** LookupMd
 
 type LookupMd f = Lookup f Int PValMd
@@ -145,7 +147,7 @@ mdNodeRef cxt mt ix =
     Nothing -> flip fmap (lookup ix) $
       \case
         ValMdRef i -> i
-        _          -> X.throw (BadValueRef cxt ix) -- TODO: better error messages
+        _          -> X.throw (WrongType cxt "ValMdRef" ix)
   where thd (_, _, z) = z
 
 mdForwardRefOrNull :: (Applicative f)
@@ -170,7 +172,8 @@ mdString :: Applicative f
 mdString cxt mt ix =
   case mdStringOrNull cxt mt ix of
     Just str -> str
-    Nothing  -> X.throw (NotAString cxt ix)
+    Nothing  ->
+      X.throw (BadValueRef cxt (Map.keysSet $ valueEntries (mt ^. mtEntries)) ix)
 
 mdStringOrNull :: Applicative f
                => [String]
@@ -182,7 +185,7 @@ mdStringOrNull cxt mt ix =
       Just y  -> Just $ flip fmap y $
         \case
           (ValMdString str) -> str
-          _                 -> X.throw (BadTypeRef cxt ix)
+          _                 -> X.throw (WrongType cxt "ValMdString" ix)
       Nothing -> Nothing
 
 -- | This version is useful in 'Compose'd blocks

@@ -1,11 +1,8 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE Strict #-}
-
 {-|
 Module      : Data.LLVM.BitCode.IR.Metadata.Resolve
 Description : Resolve forward references in metadata blocks
@@ -81,7 +78,7 @@ lookupStateExcept i = do
       tell [ "Couldn't resolve reference for key:"
            , Text.pack (show i)
            , "Map contained keys:"
-           , Text.pack (show $! Map.keysSet st)
+           , Text.pack (show $ Map.keysSet st)
            ]
       raise i
 
@@ -90,7 +87,7 @@ type SEW k v = ExceptionT k (StateT (Map k v) (Writer [Text]))
 
 runSEW :: SEW k v a -> Map k v -> (Validation k a, Map k v, [Text])
 runSEW sew m =
-  let !((x, y), z) = runWriter $! runStateT m $! runExceptionT sew
+  let ((x, y), z) = runWriter $ runStateT m $ runExceptionT sew
   in (fromEither x, y, z)
 
 -- type StateExceptT s e m    = StateT s (ExceptionT e m)
@@ -99,20 +96,20 @@ runSEW sew m =
 -- type StateExceptMap k v    = StateExcept (Map k v) k
 
 resolveOne' :: forall m k v a. ( Show k           -- Logging
-                              , Show v           -- Logging
-                              , Show a           -- Logging
-                              , WriterM m [Text] -- Logging
-                              , Ord k            -- Map
-                              , StateM m (Counter, Map k v)
-                              )
+                               , Show v           -- Logging
+                               , Show a           -- Logging
+                               , WriterM m [Text] -- Logging
+                               , Ord k            -- Map
+                               , StateM m (Counter, Map k v)
+                               )
             => Lookup (SEW k v) k v a
             -> m (Validation k a)
 resolveOne' sev =
   let -- First, feed lookupStateExcept through the reader.
       sev' :: SEW k v a
-      sev' = runReader lookupStateExcept . getCompose $! sev
+      sev' = runReader lookupStateExcept . getCompose $ sev
   in do
-    st <- snd <$!> get
+    st <- snd <$> get
     -- Run the value with the current state.
 
     let (result, newState, log_) = runSEW sev' st
@@ -122,7 +119,7 @@ resolveOne' sev =
       -- If it raised an exception, just feed that on through.
       Failure i  -> do
         tell log_
-        pure $! Failure i
+        pure $ Failure i
       -- Otherwise, merge any updated state (resolved references),
       Success v -> do
         tell [ "Resolved all references in node: "
@@ -130,7 +127,7 @@ resolveOne' sev =
              ]
         -- sets_ (Map.union newState)
         -- And pass the rest on through.
-        pure $! Success v
+        pure $ Success v
 
 resolveOne :: forall m k v a. ( Show k           -- Logging
                               , Show v           -- Logging
@@ -141,7 +138,7 @@ resolveOne :: forall m k v a. ( Show k           -- Logging
                               )
            => Lookup (SEW k v) k v a
            -> m (Validation k a)
-resolveOne sev = sets_ (first $! const (initCtr 1)) >> resolveOne' sev
+resolveOne sev = sets_ (first $ const (initCtr 1)) >> resolveOne' sev
 
 -- | Take a 'Traversable' containing values that need an "effectful lookup
 -- table". Pass it 'lookupStateExcept' and run it with the current state. If it
@@ -157,12 +154,12 @@ resolveSome :: forall m k v f a. ( Show k           -- Logging
                                  )
             => f (Lookup (SEW k v) k v a)
             -> m (f (Validation k a))
-resolveSome f = trace "resolveSome" $! do
-  sets_ $! first (const $! initCtr (length f))
+resolveSome f = do
+  sets_ $ first (const $ initCtr (length f))
   for f $ \sev -> do
-    ctr <- fst <$!> get
+    ctr <- fst <$> get
     tell [ Text.append "Current ctr:" (ppCtr ctr) ]
-    resolveOne' $! sev
+    resolveOne' sev
 
 -- | An analogue of Map.mapEither
 mapValidation :: Map a (Validation b c) -> (Map a b, Map a c)
@@ -190,7 +187,7 @@ resolveAll mp = do
   let assert1 =
         assert (Map.keysSet mp == Set.union (Map.keysSet lefts) (Map.keysSet rights))
   -- Take the resolved references and add them to the state.
-  sets_ $! assert1 $! (second $! Map.union rights)
+  sets_ $ assert1 (second $ Map.union rights)
 
   st <- snd <$> get
 
@@ -208,7 +205,7 @@ resolveAll mp = do
   let diff = Set.difference needResolved (Set.union haveResolved mightResolve)
 
   if | Map.null lefts ->                     -- If everything was resolved,
-         pure $! (Success $! st) -- then we're done; the state holds the results.
+         pure (Success st) -- then we're done; the state holds the results.
      | Map.size lefts == Map.size mp ->
          fail $ unlines [ "Exception: Couldn't resolve anything!"
                         , show lefts
@@ -216,15 +213,15 @@ resolveAll mp = do
      -- This condition guards against infinite loops: If there's no hope that
      -- updating the state further (with a recursive call) would lead to
      -- completion, it returns the current 'lefts'.
-     | not $! Set.null $! diff -> do
+     | not $ Set.null diff -> do
          tell [ "Metadata contain some references not found in the AST:"
-              , Text.pack $! show diff
+              , Text.pack $ show diff
               ]
-         pure $! assert (Set.union haveResolved mightResolve == Map.keysSet mp)
-              $! Failure (Map.toList lefts)
+         pure $ assert (Set.union haveResolved mightResolve == Map.keysSet mp)
+              $ Failure (Map.toList lefts)
      | otherwise -> -- O/w, recurse on only the as-yet unresolved values.
-         trace "recursing" $! trace (show $ Map.size lefts)
-                           $! resolveAll mp'
+         trace "recursing" $ trace (show $ Map.size lefts)
+                           $ resolveAll mp'
 
 -- | Call 'resolveSome' and hope all the references are in the state.
 --
@@ -245,8 +242,8 @@ resolveAllMap :: forall m k v k' v'. ( Show k           -- Logging
 resolveAllMap mp = do
   -- fmap Map.fromList <$>
   --   (resolveAllList . map (\(a, b) -> tupleA2 (pure a, b)) . Map.toList $ mp)
-  (lefts, rights) <- trace "mapValidation" $! mapValidation <$!> resolveSome mp
-  pure $! if   not     (Map.null lefts)
+  (lefts, rights) <- trace "mapValidation" $ mapValidation <$> resolveSome mp
+  pure $ if   not     (Map.null lefts)
           then Failure (Map.toList lefts)
           else Success rights
 
@@ -261,6 +258,6 @@ resolveAllList :: forall m k v a. ( Show k           -- Logging
                -> m (Validation [k] [a])
 resolveAllList l =
   -- We can use 'sequenceA' because of the behavior of 'Validation'
-  traverse singletonLeft <$!> resolveSome l
+  traverse singletonLeft <$> resolveSome l
   where singletonLeft (Failure  left) = Failure  [left]
         singletonLeft (Success right) = Success right

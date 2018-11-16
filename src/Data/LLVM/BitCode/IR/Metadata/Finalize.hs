@@ -68,10 +68,7 @@ unnamedEntries pm = trace "unnamedEntries:" $
   let xx = mapMaybe (resolveNode (valueEntries $ pm ^. pmEntries . mtEntries)) $
         Map.toList $ pm ^. pmEntries . mtNodes
       yy = partitionEithers xx
-  in flip trace yy $ intercalate "," $ flip map xx $ \x ->
-    case x of
-      Left _  -> "Left"
-      Right _ -> "Right"
+  in yy 
   where
     -- TODO: is this silently eating errors with metadata that's not in the
     -- value table (by passing along the 'Nothing' from the Map lookup)?

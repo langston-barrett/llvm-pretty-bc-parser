@@ -116,6 +116,10 @@ parseModuleBlock ents = label "MODULE_BLOCK" $ do
         Just es -> parseValueSymbolTableBlock es
         Nothing -> return emptyValueSymtab
 
+    -- We parse the constants block(s?) first in case the metadata reference
+    -- them in a METADATA_VALUE
+    -- _ <- forM_ (mapMaybe constantsBlockId ents) parseConstantsBlock
+
     valTab <- getValueTable
     (namedMd, (globUnnamedMd, _), instrMdAttach, pFnMdAttach, pGlobalAttach) <-
       trace ("Module blocks:\n" ++ show (ppBlocks ents)) $
@@ -126,14 +130,14 @@ parseModuleBlock ents = label "MODULE_BLOCK" $ do
     pm <- withValueSymtab symtab
         $ foldM parseModuleBlockEntry emptyPartialModule ents
 
-    valTab' <- trace "aaag (4)" $ getValueTable
+    valTab' <- getValueTable
 
     -- Update partial module with metadata attached to global variables
     let pm' = pm { partialUnnamedMd = partialUnnamedMd pm ++ globUnnamedMd
                  , partialNamedMd   = partialNamedMd   pm ++ namedMd
                  }
 
-    case addGlobalAttachments pGlobalAttach valTab' pm' of
+    case trace "added global attachments" $ addGlobalAttachments pGlobalAttach valTab' pm' of
       Left err   -> fail err
       Right pm'' -> finalizeModule pm''
 
@@ -152,6 +156,7 @@ parseModuleBlockEntry pm (typeBlockIdNew -> Just _) = do
 
 parseModuleBlockEntry pm (constantsBlockId -> Just es) = do
   -- CONSTANTS_BLOCK_ID
+  -- TODO: ???
   parseConstantsBlock es
   return pm
 

@@ -2,6 +2,7 @@
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PartialTypeSignatures #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-|
 Module      : Data.LLVM.BitCode.IR.Metadata
@@ -108,6 +109,7 @@ preparseMetadata valTab entries =
                 (pm ^. pmInstrAttachments)
             fnAtt'          <- trace "fnAtt"   $! resolveAllMap (pm ^. pmFnAttachments)
             globAtt'        <- trace "globAtt" $! resolveAllMap $! seqMap <$> pm ^. pmGlobalAttachments
+            -- globAtt'        <- (undefined :: _ (Validation Int _))
 
             pure (vte', namedGlobals', unnamedGlobals', instrAtt', fnAtt', globAtt')
 

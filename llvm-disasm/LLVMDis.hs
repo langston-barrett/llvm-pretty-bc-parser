@@ -91,9 +91,9 @@ disasm opts file = do
       exitFailure
 
     Right m  -> do
-        if optAST opts
-          then pPrint m
-          else renderLLVM opts m
+      if optAST opts
+      then pPrint m
+      else renderLLVM opts m
 
 renderLLVM :: Options -> Module -> IO ()
 renderLLVM opts m = do

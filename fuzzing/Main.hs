@@ -428,6 +428,7 @@ runTest tmpDir (clangExe, flags) seed opts = X.handle return $ do
           Just ver -> "--llvm-version=" ++ ver
   ---- Run csmith ----
   csmithPath <- getCsmithPath opts
+  putStrLn "[INFO] Running cmith"
   callProcess "csmith" [
       "-o", tmpDir </> srcFile
     , "-s", show seed
@@ -435,6 +436,7 @@ runTest tmpDir (clangExe, flags) seed opts = X.handle return $ do
   srcSize <- getFileSize (tmpDir </> srcFile)
 
   ---- Run clang ----
+  putStrLn $ "[INFO] Compiling with clang: " ++ clangExe
   h <- spawnProcess clangExe (words flags ++ [
       "-I" ++ csmithPath
     , "-c", "-emit-llvm"
@@ -445,6 +447,9 @@ runTest tmpDir (clangExe, flags) seed opts = X.handle return $ do
   unless (clangErr == ExitSuccess) $ X.throw $!! TestClangError seed
 
   ---- Disassemble ----
+  putStrLn $ "[INFO] Disassembling with llvm-disasm"
+  putStrLn $ "[DEBUG] " ++ show [ llvmVersion, tmpDir </> bcFile ]
+
   (ec, out, err) <-
     readProcessWithExitCode "llvm-disasm" [ llvmVersion, tmpDir </> bcFile ] ""
   case ec of
@@ -460,6 +465,7 @@ runTest tmpDir (clangExe, flags) seed opts = X.handle return $ do
   writeFile (tmpDir </> llFile) out
 
   ---- Assemble ----
+  putStrLn $ "[INFO] Re-assembling with clang: " ++ clangExe
   when (optRunAs opts) $ do
     (ec, out, err) <- readProcessWithExitCode clangExe (words flags ++ [
         "-I" ++ csmithPath
@@ -478,6 +484,7 @@ runTest tmpDir (clangExe, flags) seed opts = X.handle return $ do
       ExitSuccess -> return ()
 
   ---- Re-run Clang ----
+  putStrLn $ "[INFO] Compiling with clang: " ++ clangExe
   when (optRunExec opts) $ do
     h <- spawnProcess clangExe (words flags ++ [
         "-I" ++ csmithPath

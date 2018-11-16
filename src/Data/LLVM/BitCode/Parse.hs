@@ -15,6 +15,7 @@ import Text.LLVM.PP
 import Control.Applicative (Alternative(..))
 import Control.Monad.Fix (MonadFix)
 import Data.Maybe (fromMaybe)
+import Data.Set (Set)
 import Data.Semigroup
 import Data.Typeable (Typeable)
 import Data.Word ( Word32 )
@@ -181,25 +182,36 @@ mkTypeTable :: [Type] -> TypeTable
 mkTypeTable  = Map.fromList . zip [0 ..]
 
 data BadForwardRef
-  = BadTypeRef [String] Int
-  | BadValueRef [String] Int
-  | NotAString [String] Int
-    deriving (Show,Typeable)
+  = BadTypeRef  [String] (Set Int) Int -- ^ Type wasn't present in table
+  | BadValueRef [String] (Set Int) Int -- ^ Value wasn't present in table
+  | WrongType   [String] String Int    -- ^ Value had the wrong type
+    deriving (Show, Typeable)
 
 instance X.Exception BadForwardRef
 
 badRefError :: BadForwardRef -> Error
 badRefError ref = case ref of
-  BadTypeRef  c i -> Error c ("bad forward reference to type: " ++ show i)
-  BadValueRef c i -> Error c ("bad forward reference to value: " ++ show i)
-  NotAString  c i -> Error c ("expected a string: " ++ show i)
+  BadTypeRef  c vt i ->
+    Error c $ unlines [ "bad forward reference to type: " ++ show i
+                      , "value table had keys: " ++ show vt
+                      ]
+  BadValueRef c vt i ->
+    Error c $ unlines [ "bad forward reference to value: " ++ show i
+                      , "value table had keys: " ++ show vt
+                      ]
+  WrongType   c ty i -> Error c $ unlines [ "At index " ++ show i
+                                          , "expected value of type: "
+                                          , show ty
+                                          ]
 
 -- | As type tables are always pre-allocated, looking things up should never
 -- fail.  As a result, the worst thing that could happen is that the type entry
 -- causes a runtime error.  This is pretty bad, but it's an acceptable trade-off
 -- for the complexity of the forward references in the type table.
 lookupTypeRef :: [String] -> Int -> TypeTable -> Type
-lookupTypeRef cxt n = fromMaybe (X.throw (BadTypeRef cxt n)) . Map.lookup n
+lookupTypeRef cxt n tt =
+  fromMaybe (X.throw (BadTypeRef cxt (Map.keysSet tt) n))
+            (Map.lookup n tt)
 
 setTypeTable :: TypeTable -> Parse ()
 setTypeTable table = Parse $ do
@@ -341,8 +353,9 @@ lookupValue n = lookupValueTable n `fmap` getValueTable
 -- the time it's needed.  NOTE: This always looks up an absolute index, never a
 -- relative one.
 forwardRef :: [String] -> Int -> ValueTable' a -> a
-forwardRef cxt n vt = trace "forwardRef" $
-  fromMaybe (X.throw (BadValueRef cxt n)) (lookupValueTableAbs n vt)
+forwardRef cxt n vt =
+  fromMaybe (X.throw (BadValueRef cxt (Map.keysSet (valueEntries vt)) n))
+            (lookupValueTableAbs n vt)
 
 -- | Require that a value be present.
 requireValue :: Int -> Parse (Typed PValue)
