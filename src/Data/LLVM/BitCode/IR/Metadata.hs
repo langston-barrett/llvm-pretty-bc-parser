@@ -603,11 +603,12 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       return $! updateMetadataTable
         (addDebugInfo isDistinct (DebugInfoSubroutineType dist)) pm
 
+    -- The 0th field is ignored, compile units are always distinct
+    -- https://github.com/llvm-mirror/llvm/commit/c61bc48acb6bd55fa6b96b9b27de079b441e0b17
     20 -> label "METADATA_COMPILE_UNIT" $ do
       assertRecordSizeBetween 14 19
       let recordSize = length (recordFields r)
       ctx        <- getContext
-      isDistinct <- parseField r 0 nonzero
       dicu       <- DICompileUnit
         <$> parseField r 1 numeric                                  -- dicuLanguage
         <*> (mdForwardRefOrNull ctx mt <$> parseField r 2 numeric)  -- dicuFile
@@ -635,7 +636,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
         else parseField r 16 nonzero
       let dicu' = dicu dicuDWOId dicuSplitDebugInlining
       return $! updateMetadataTable
-        (addDebugInfo isDistinct (DebugInfoCompileUnit dicu')) pm
+        (addDebugInfo True (DebugInfoCompileUnit dicu')) pm
 
 
     21 -> label "METADATA_SUBPROGRAM" $ do
