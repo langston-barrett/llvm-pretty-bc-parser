@@ -603,6 +603,7 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     ty       <- elimPtrTo (typedType ptr)
                   `mplus` fail "invalid type to INST_STORE"
     val      <- getValue t ty =<< field ix numeric
+    typecheckStoreInst val ptr
     aval     <- field (ix+1) numeric
     let align | aval > 0  = Just (bit aval `shiftR` 1)
               | otherwise = Nothing
@@ -723,6 +724,7 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     notImplemented
 
   -- LLVM 6.0: [ptrty, ptr, val, operation, vol, ordering, ssid]
+  -- The code is identical for LLVM 6.0-8.0.
   -- https://github.com/llvm-mirror/llvm/blob/release_60/lib/Bitcode/Reader/BitcodeReader.cpp#L4420
   38 -> label "FUNC_CODE_INST_ATOMICRMW" $ do
     -- TODO: parse sync scope (ssid)
@@ -743,18 +745,26 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
 
     val <-
       case typedType ptr of
-        PtrTo ty -> do
-          -- "NextValueNo" in the C++ becomes "ix'" here, as in INST_BINOP
-          getValue t ty ix'
-          -- The following check gives false negatives. Not sure why.
-          -- if ty /= (typedType typed)
-          -- then fail $ unlines $ [ "Wrong type of value retrieved from value table"
-          --                       , "Expected: " ++ show (ty)
-          --                       , "Got: " ++ show (typedType typed)
-          --                       ]
-          -- else pure typed
+        PtrTo ty@(PrimType prim) -> do
 
-        ty       -> fail $ "Expected pointer type, found " ++ show ty
+          -- Catch pointers of the wrong type
+          when (case prim of
+                  Integer   _ -> False
+                  FloatType _ -> False
+                  _           -> True) $
+            fail $ "Expected pointer to integer or float, found " ++ show ty
+
+          -- "NextValueNo" in the C++ becomes "ix'" here, as in INST_BINOP
+          typed <- getValue t ty =<< parseField r ix' numeric
+          -- The following check gives false negatives. Not sure why.
+          if ty /= (typedType typed)
+          then fail $ unlines $ [ "Wrong type of value retrieved from value table"
+                                , "Expected: " ++ show (ty)
+                                , "Got: " ++ show (typedType typed)
+                                ]
+          else pure typed
+
+        ty -> fail $ "Expected pointer to integer or float, found " ++ show ty
 
 
     result (typedType ptr) (AtomicRW volatile operation ptr val Nothing ordering) d
@@ -784,14 +794,20 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
 
     (ret,ix') <-
       if length (recordFields r) == ix + 5
-         then do ty <- getType =<< parseField r ix numeric
-                 return (ty, ix + 1)
+      then do
+        ty <- getType =<< parseField r ix numeric
+        if (PtrTo ty /= typedType tv)
+        then fail $ unlines
+          [ "Type mismatch in load instruction"
+          , "Pointer type: " ++ show (typedType tv)
+          , "Value type: " ++ show ty
+          ]
+        else return (ty, ix + 1)
 
-         else do ty <- elimPtrTo (typedType tv)
-                           `mplus` fail "invalid type to INST_LOADATOMIC"
-                 return (ty, ix)
-
-    typecheckLoadStoreInst (typedType tv) (PtrTo ret)
+      else do
+        ty <- elimPtrTo (typedType tv)
+                `mplus` fail "invalid type to INST_LOADATOMIC"
+        return (ty, ix)
 
     ordval <- getDecodedOrdering =<< parseField r (ix' + 2) unsigned
     when (ordval `elem` Nothing:map Just [Release, AcqRel]) $
@@ -814,11 +830,13 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
   43 -> label "FUNC_CODE_INST_GEP" (parseGEP t Nothing r d)
 
   44 -> label "FUNC_CODE_INST_STORE" $ do
-    let field = parseField r
     (ptr,ix)  <- getValueTypePair t r 0
     (val,ix') <- getValueTypePair t r ix
     Assert.recordSizeIn r [ix' + 2]
-    aval      <- field ix' numeric
+
+    typecheckStoreInst val ptr
+
+    aval      <- parseField r ix' numeric
     let align | aval > 0  = Just (bit aval `shiftR` 1)
               | otherwise = Nothing
     effect (Store val ptr Nothing align) d
@@ -829,9 +847,7 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     (val, ix') <- getValueTypePair t r ix
 
     Assert.recordSizeIn r [ix' + 4]
-
-    -- The PtrTo is eliminated in the case of LOADATOMIC
-    -- typecheckLoadStoreInst (PtrTo (typedType val)) (typedType ptr)
+    typecheckStoreInst val ptr
 
     -- TODO: There's no spot in the AST for this ordering. Should there be?
     ordering <- getDecodedOrdering =<< parseField r (ix' + 2) unsigned
@@ -1242,17 +1258,27 @@ parseClauses t r = loop
         1 -> return (Filter val : cs)
         _ -> fail ("Invalid clause type: " ++ show cty)
 
--- | Ensure that the type of the load/store value matches the type being pointed
+-- | Ensure that the type of the store value matches the type being pointed
 -- to by the pointer.
 --
 -- See: https://github.com/llvm-mirror/llvm/blob/release_60/lib/Bitcode/Reader/BitcodeReader.cpp#L3328
-typecheckLoadStoreInst :: Type -> Type -> Parse ()
-typecheckLoadStoreInst valTy ptrTy = do
-  when (valTy /= ptrTy) $ fail $ unlines
-    [ "Load/store type does not patch type of pointer."
-    , "Pointer type: " ++ show ptrTy
-    , "Value type: " ++ show valTy
-    ]
+typecheckStoreInst :: Typed a -- ^ Value
+                   -> Typed b -- ^ Pointer
+                   -> Parse ()
+typecheckStoreInst val ptr =
+  case (typedType val, typedType ptr) of
+    (valTy, PtrTo pointsToTy) ->
+      when (valTy /= pointsToTy) $ fail $ unlines
+        [ "Store value type does not patch type of pointer."
+        , "Pointer type: " ++ show (PtrTo pointsToTy)
+        , "Value type: "   ++ show valTy
+        ]
+    (valTy, pointerTy) ->
+      fail $ unlines
+        [ "Expected pointer type in load/store instruction."
+        , "Pointer type: " ++ show pointerTy
+        , "Value type: " ++ show valTy
+        ]
 
 
 getDecodedOrdering :: Word32 -> Parse (Maybe AtomicOrdering)
