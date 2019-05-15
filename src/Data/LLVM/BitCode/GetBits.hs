@@ -32,7 +32,7 @@ runGetBits m = fst `fmap` unGetBits m Aligned
 
 instance Functor GetBits where
   {-# INLINE fmap #-}
-  fmap f m = GetBits (\ off -> first f <$> unGetBits m off)
+  fmap f m = GetBits (fmap (first f) . unGetBits m)
 
 instance Applicative GetBits where
   {-# INLINE pure #-}
@@ -58,7 +58,7 @@ instance Monad GetBits where
 
 instance Alternative GetBits where
   {-# INLINE empty #-}
-  empty   = GetBits (\_ -> mzero)
+  empty   = GetBits (const mzero)
 
   {-# INLINE (<|>) #-}
   a <|> b = GetBits (\ off -> unGetBits a off <|> unGetBits b off)
@@ -139,11 +139,11 @@ bytestring n = GetBits $ \ off -> case off of
 
 -- | Add a label to the error tag stack.
 label :: String -> GetBits a -> GetBits a
-label l m = GetBits (\ off -> C.label l (unGetBits m off))
+label l m = GetBits (C.label l . unGetBits m)
 
 -- | Isolate input length, in 32-bit words.
 isolate :: Int -> GetBits a -> GetBits a
-isolate ws m = GetBits (\ off -> C.isolate (ws * 4) (unGetBits m off))
+isolate ws m = GetBits (C.isolate (ws * 4) . unGetBits m)
 
 -- | Try to parse something, returning Nothing when it fails.
 --

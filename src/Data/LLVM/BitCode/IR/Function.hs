@@ -1,7 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Data.LLVM.BitCode.IR.Function where
@@ -23,7 +22,7 @@ import           Text.LLVM.PP
 import           Control.Monad (when,unless,mplus,mzero,foldM,(<=<),msum)
 import           Data.Bits (shiftR,bit,shiftL,testBit,(.&.),(.|.),complement)
 import           Data.Int (Int32)
-import           Data.Maybe (isJust)
+import           Data.Maybe (isJust, isNothing)
 import           Data.Word (Word32)
 import qualified Data.Foldable as F
 import qualified Data.IntMap as IntMap
@@ -555,7 +554,7 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
         mask = (1 `shiftL` 5) .|. -- inalloca
                (1 `shiftL` 6) .|. -- explicit type
                (1 `shiftL` 7)     -- swift error
-        aval = (1 `shiftL` (fromIntegral (align .&. complement mask))) `shiftR` 1
+        aval = (1 `shiftL` fromIntegral (align .&. complement mask)) `shiftR` 1
         explicitType = testBit align 6
         ity = if explicitType then PtrTo instty else instty
 
@@ -729,7 +728,7 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
 
   -- [ptrty,ptr,cmp,new, align, vol,
   --  ordering, synchscope]
-  37 -> label "FUNC_CODE_INST_CMPXCHG_OLD" $ do
+  37 -> label "FUNC_CODE_INST_CMPXCHG_OLD"
     notImplemented
 
   -- LLVM 6.0: [ptrty, ptr, val, operation, vol, ordering, ssid]
@@ -763,9 +762,9 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
 
         val <- do
           typed <- getValue t ty =<< parseField r ix' numeric
-          if ty /= (typedType typed)
-          then fail $ unlines $ [ "Wrong type of value retrieved from value table"
-                                , "Expected: " ++ show (ty)
+          if ty /= typedType typed
+          then fail $ unlines [ "Wrong type of value retrieved from value table"
+                                , "Expected: " ++ show ty
                                 , "Got: " ++ show (typedType typed)
                                 ]
           else pure typed
@@ -816,14 +815,14 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     let align | aval > 0  = Just (bit aval `shiftR` 1)
               | otherwise = Nothing
 
-    when (ordval /= Nothing && align == Nothing)
+    when (isJust ordval && isNothing align)
          (fail "Invalid record")
 
     result ret (Load (tv { typedType = PtrTo ret }) ordval align) d
 
 
   -- [ptrty, ptr, val, align, vol, ordering, synchscope]
-  42 -> label "FUNC_CODE_INST_STOREATOMIC_OLD" $ do
+  42 -> label "FUNC_CODE_INST_STOREATOMIC_OLD"
     notImplemented
 
   43 -> label "FUNC_CODE_INST_GEP" (parseGEP t Nothing r d)
@@ -875,7 +874,7 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     -- Assert.recordSizeGreater r (ix'' + 5)
 
     Assert.ptrTo "cmpxchg : <ty>* <pointer>, <ty> <cmp>, <ty> <new> " ptr val
-    when (typedType val /= typedType new) $ fail $ unlines $
+    when (typedType val /= typedType new) $ fail $ unlines
       [ "Mismatched value types:"
       , "cmp value: " ++ show (typedValue val)
       , "new value: " ++ show (typedValue new)
@@ -931,29 +930,25 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
     clauses    <- parseClauses t r len 3
     result ty (LandingPad ty Nothing isCleanup clauses) d
 
-  48 -> label "FUNC_CODE_CLEANUPRET" $ do
-    -- Assert.recordSizeIn r [1, 2]
+  48 -> label "FUNC_CODE_CLEANUPRET"
     notImplemented
 
-  49 -> label "FUNC_CODE_CATCHRET" $ do
-    -- Assert.recordSizeIn r [2]
+  49 -> label "FUNC_CODE_CATCHRET"
     notImplemented
 
-  50 -> label "FUNC_CODE_CATCHPAD" $ do
+  50 -> label "FUNC_CODE_CATCHPAD"
     notImplemented
 
-  51 -> label "FUNC_CODE_CLEANUPPAD" $ do
-    -- Assert.recordSizeGreater r [1]
+  51 -> label "FUNC_CODE_CLEANUPPAD"
     notImplemented
 
-  52 -> label "FUNC_CODE_CATCHSWITCH" $ do
-    -- Assert.recordSizeGreater r [1]
+  52 -> label "FUNC_CODE_CATCHSWITCH"
     notImplemented
 
   -- 53 is unused
   -- 54 is unused
 
-  55 -> label "FUNC_CODE_OPERAND_BUNDLE" $ do
+  55 -> label "FUNC_CODE_OPERAND_BUNDLE"
     notImplemented
 
   -- [opty,opval,opval,pred]
@@ -1001,13 +996,12 @@ parseFunctionBlockEntry _ t d (fromEntry -> Just r) = case recordCode r of
   -- unknown
    | otherwise -> fail ("instruction code " ++ show code ++ " is unknown")
 
-parseFunctionBlockEntry _ _ d (valueSymtabBlockId -> Just _) = do
-  -- this is parsed before any of the function block
+parseFunctionBlockEntry _ _ d (valueSymtabBlockId -> Just _) =
   return d
 
 parseFunctionBlockEntry globals t d (metadataBlockId -> Just es) = do
   (_, (globalUnnamedMds, localUnnamedMds), _, _, _) <- parseMetadataBlock globals t es
-  if (null localUnnamedMds)
+  if null localUnnamedMds
     then return d { partialGlobalMd = globalUnnamedMds ++ partialGlobalMd d }
     else return d -- silently drop unexpected local unnamed metadata
 
@@ -1026,11 +1020,10 @@ parseFunctionBlockEntry _ _ d (abbrevDef -> Just _) =
   -- ignore any abbreviation definitions
   return d
 
-parseFunctionBlockEntry _ _ d (uselistBlockId -> Just _) = do
-  -- ignore the uselist block
+parseFunctionBlockEntry _ _ d (uselistBlockId -> Just _) =
   return d
 
-parseFunctionBlockEntry _ _ _ e = do
+parseFunctionBlockEntry _ _ _ e =
   fail ("function block: unexpected: " ++ show e)
 
 addInstrAttachments :: InstrMdAttachments -> BlockList -> BlockList
@@ -1193,7 +1186,7 @@ interpGep ty vs = check (resolveGep ty vs)
   where
   check res = case res of
     HasType rty -> return (PtrTo rty)
-    Invalid -> fail $ unlines $
+    Invalid -> fail $ unlines
       [ "Unable to determine the type of getelementptr"
       , "Input type: " ++ show ty
       ]
@@ -1217,7 +1210,7 @@ interpValueIndex ty is = check (resolveValueIndex ty is)
   where
   check res = case res of
     Invalid ->
-      fail $ unlines $
+      fail $ unlines
         [ "Unable to determine the return type of `extractvalue`"
         , "Hint: The input type should be an aggregate type (struct or array)"
         , "Input type: " ++ show ty

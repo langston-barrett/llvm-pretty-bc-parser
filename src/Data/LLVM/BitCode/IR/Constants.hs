@@ -16,7 +16,7 @@ import           Text.LLVM.AST
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
 import           Control.Monad (mplus,mzero,foldM,(<=<))
 import           Control.Monad.ST (runST,ST)
-import           Data.Array.ST (newArray,readArray,MArray,STUArray)
+import           Data.Array.ST (newArray, readArray, MArray, STUArray)
 import           Data.Bits (shiftL,shiftR,testBit)
 import qualified Data.Map as Map
 import           Data.Maybe (fromMaybe, isJust)
@@ -248,7 +248,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
       Array _n fty ->
         return (getTy, Typed ty (ValArray fty (map typedValue vals)):cs)
 
-      Vector _n ety -> do
+      Vector _n ety ->
         return (getTy, Typed ty (ValVector ety (map typedValue vals)):cs)
 
       _ -> return (getTy, Typed ty ValUndef:cs)
@@ -310,13 +310,13 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
     return (getTy, Typed ty (ValConstExpr ce):cs)
 
   -- [opty,opval,opval]
-  14 -> label "CST_CODE_CE_EXTRACTELT" $ do
+  14 -> label "CST_CODE_CE_EXTRACTELT" $
     notImplemented
 
-  15 -> label "CST_CODE_CE_INSERTELT" $ do
+  15 -> label "CST_CODE_CE_INSERTELT" $
     notImplemented
 
-  16 -> label "CST_CODE_CE_SHUFFLEVEC" $ do
+  16 -> label "CST_CODE_CE_SHUFFLEVEC" $
     notImplemented
 
   -- [opty, opval, opval, pred]
@@ -351,7 +351,7 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
 
     return (getTy, Typed ty (ValAsm sideEffect alignStack asm cst):cs)
 
-  19 -> label "CST_CODE_CE_SHUFFLEVEC_EX" $ do
+  19 -> label "CST_CODE_CE_SHUFFLEVEC_EX" $
     notImplemented
 
   -- [n x operands]
@@ -406,8 +406,8 @@ parseConstantEntry t (getTy,cs) (fromEntry -> Just r) =
     constStrSize <- field (2 + asmStrSize) numeric
     Assert.recordSizeGreater r (2 + asmStrSize + constStrSize)
 
-    asmStr   <- fmap UTF8.decode $ parseSlice r  2               asmStrSize   char
-    constStr <- fmap UTF8.decode $ parseSlice r (3 + asmStrSize) constStrSize char
+    asmStr   <- UTF8.decode <$> parseSlice r  2               asmStrSize   char
+    constStr <- UTF8.decode <$> parseSlice r (3 + asmStrSize) constStrSize char
 
     ty <- getTy
     let val = ValAsm hasSideEffects isAlignStack asmStr constStr
@@ -455,7 +455,7 @@ parseCeGep isInbounds mInrangeIdx t r = do
 parseWideInteger :: Record -> Parse Integer
 parseWideInteger r = do
   limbs <- parseFields r 0 signedWord64
-  return (foldr (\l acc -> acc `shiftL` 64 + (toInteger l)) 0 limbs)
+  return (foldr (\l acc -> acc `shiftL` 64 + toInteger l) 0 limbs)
 
 resolveNull :: Type -> Parse PValue
 resolveNull ty = case typeNull ty of

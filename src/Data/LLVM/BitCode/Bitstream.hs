@@ -1,4 +1,3 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE PatternGuards #-}
 
 module Data.LLVM.BitCode.Bitstream (
@@ -388,7 +387,7 @@ unabbrevSetBid record = do
   guard (unabbrevCode record == 1)
   guard (not (null (unabbrevOps record)))
   return BlockInfo
-    { infoId      = fromBitString (unabbrevOps record !! 0)
+    { infoId      = fromBitString (head (unabbrevOps record))
     , infoAbbrevs = emptyAbbrevMap
     }
 

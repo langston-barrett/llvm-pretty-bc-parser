@@ -107,7 +107,7 @@ parseFields r n = parseSlice r n (length (recordFields r))
 parseSlice :: Record -> Int -> Int -> Match Field a -> Parse [a]
 parseSlice r l n p = loop (take n (drop l (recordFields r)))
   where
-  loop (f:fs) = do
+  loop (f:fs) =
     case p f of
       Just a  -> (a:) `fmap` loop fs
       Nothing -> fail $ unwords

@@ -19,8 +19,7 @@ import Text.LLVM.AST
 
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
 import Control.Monad (foldM,guard,when,forM_)
-import Data.List (sortBy)
-import Data.Ord (comparing)
+import Data.List (sortOn)
 import qualified Data.Foldable as F
 import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
@@ -77,7 +76,7 @@ finalizeModule pm = label "finalizeModule" $ do
     { modSourceName = partialSourceName pm
     , modDataLayout = partialDataLayout pm
     , modNamedMd    = partialNamedMd pm
-    , modUnnamedMd  = sortBy (comparing umIndex) unnamed
+    , modUnnamedMd  = sortOn umIndex unnamed
     , modGlobals    = F.toList globals
     , modDefines    = F.toList defines
     , modTypes      = types

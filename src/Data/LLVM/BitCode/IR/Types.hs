@@ -15,9 +15,8 @@ import           Text.LLVM.AST
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
 import           Control.Monad (when,unless,mplus,(<=<))
 import qualified Data.IntMap as IntMap
-import           Data.List (sortBy)
+import           Data.List (sortOn)
 import           Data.Maybe (catMaybes)
-import           Data.Ord (comparing)
 
 
 -- Type Block ------------------------------------------------------------------
@@ -30,7 +29,7 @@ resolveTypeDecls :: Parse [TypeDecl]
 resolveTypeDecls  = do
   symtab <- getTypeSymtab
   decls  <- mapM mkTypeDecl (IntMap.toList (tsById symtab))
-  return (sortBy (comparing typeName) decls)
+  return (sortOn typeName decls)
   where
   mkTypeDecl (ix,alias) = do
     ty <- getType' ix
@@ -104,7 +103,7 @@ parseTypeBlockEntry (fromEntry -> Just r) = case recordCode r of
 
   5 -> label "TYPE_CODE_LABEL" (addType (PrimType Label))
 
-  6 -> label "TYPE_CODE_OPAQUE" $ do
+  6 -> label "TYPE_CODE_OPAQUE" $
     do ident    <- getTypeName
        addTypeWithAlias Opaque ident
 

@@ -2,7 +2,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE RecordWildCards #-}
+
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -30,7 +30,7 @@ import           Text.LLVM.Labels
 import qualified Codec.Binary.UTF8.String as UTF8 (decode)
 import           Control.Applicative ((<|>))
 import           Control.Exception (throw)
-import           Control.Monad (foldM, guard, mplus, when)
+import           Control.Monad (foldM, guard, mplus, when, unless)
 import           Data.Bits (shiftR, testBit, shiftL)
 import           Data.Data (Data)
 import           Data.Typeable (Typeable)
@@ -224,7 +224,7 @@ updateMetadataTable f pm = pm { pmEntries = f (pmEntries pm) }
 
 addGlobalAttachments ::
   Symbol {- ^ name of the global to attach to ^ -} ->
-  (Map.Map KindMd PValMd) {- ^ metadata references to attach ^ -} ->
+  Map.Map KindMd PValMd {- ^ metadata references to attach ^ -} ->
   (PartialMetadata -> PartialMetadata)
 addGlobalAttachments sym mds pm =
   pm { pmGlobalAttachments = Map.insert sym mds (pmGlobalAttachments pm)
@@ -323,7 +323,7 @@ unnamedEntries pm = partitionEithers (mapMaybe resolveNode (IntMap.toList (mtNod
   -- TODO: is this silently eating errors with metadata that's not in the
   -- value table (when the lookupValueTableAbs fails)?
   resolveNode (ref,(fnLocal,d,ix)) =
-    ((if fnLocal then Right else Left) <$> lookupNode ref d ix)
+    (if fnLocal then Right else Left) <$> lookupNode ref d ix
 
   lookupNode ref d ix = flip fmap (lookupValueTableAbs ref (mtEntries mt)) $
     \case
@@ -364,13 +364,13 @@ parsedMetadata pm =
 
 -- | These are useful for avoiding writing 'Compose'
 (<$$>) :: forall f g a b. (Functor f, Functor g)
-       => (a -> b) -> (f (g a)) -> Compose f g b
+       => (a -> b) -> f (g a) -> Compose f g b
 h <$$> x = h <$> Compose x
 
 -- | These are useful for avoiding writing 'pure'
 -- (i.e. only some parts of your long applicative chain use both effects)
 (<<*>) :: forall f g a b. (Applicative f, Applicative g)
-       => Compose f g (a -> b) -> (f a) -> Compose f g b
+       => Compose f g (a -> b) -> f a -> Compose f g b
 h <<*> x = h <*> Compose (pure <$> x)
 
 -- Metadata Parsing ------------------------------------------------------------
@@ -408,7 +408,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
                               ] ++ msg
       assertRecordSizeIn ns =
         let len = length (recordFields r)
-        in when (not (len `elem` ns)) $
+        in unless (len `elem` ns) $
              fail $ unlines $ [ "Invalid record size: " ++ show len
                               , "Expected one of: " ++ show ns
                               ] ++ msg
@@ -496,12 +496,11 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
         att <- mapM (\(k,md) -> (,md) <$> getKind k) patt
         return $! addInstrAttachment inst att pm
 
-    12 -> label "METADATA_GENERIC_DEBUG" $ do
-      --isDistinct <- parseField r 0 numeric
-      --tag <- parseField r 1 numeric
-      --version <- parseField r 2 numeric
-      --header <- parseField r 3 string
-      -- TODO: parse all remaining fields
+    12 -> label "METADATA_GENERIC_DEBUG" $
+      -- isDistinct <- parseField r 0 numeric
+      -- tag <- parseField r 1 numeric
+      -- version <- parseField r 2 numeric
+      -- header <- parseField r 3 string
       fail "not yet implemented"
 
     13 -> label "METADATA_SUBRANGE" $ do
@@ -624,15 +623,15 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
         <*> if recordSize <= 15
             then pure Nothing
             else mdForwardRefOrNull ctx mt <$> parseField r 15 numeric -- dicuMacros
-      dicuDWOId <-
+      dicuDWOId_ <-
         if recordSize <= 14
         then pure 0
         else parseField r 14 numeric
-      dicuSplitDebugInlining <-
+      dicuSplitDebugInlining_ <-
         if recordSize <= 16
         then pure True
         else parseField r 16 nonzero
-      let dicu' = dicu dicuDWOId dicuSplitDebugInlining
+      let dicu' = dicu dicuDWOId_ dicuSplitDebugInlining_
       return $! updateMetadataTable
         (addDebugInfo isDistinct (DebugInfoCompileUnit dicu')) pm
 
@@ -683,12 +682,12 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
             else return 0)                                                -- dispThisAdjustment
         <*> parseField r 13 numeric                                       -- dispFlags
         <*> parseField r 14 nonzero                                       -- dispIsOptimized
-        <*> (optFwdRef hasUnit       15)                                  -- dispUnit
-        <*> (optFwdRef (not hasUnit) (adj 15))                            -- dispTemplateParams
+        <*> optFwdRef hasUnit       15                                  -- dispUnit
+        <*> optFwdRef (not hasUnit) (adj 15)                            -- dispTemplateParams
         <*> (mdForwardRefOrNull ctx mt <$> parseField r (adj 16) numeric) -- dispDeclaration
         <*> (mdForwardRefOrNull ctx mt <$> parseField r (adj 17) numeric) -- dispVariables
         -- Indices 18-19 seem unused.
-        <*> (optFwdRef hasThrownTypes 20)                                 -- dispThrownTypes
+        <*> optFwdRef hasThrownTypes 20                                 -- dispThrownTypes
       -- TODO: in the LLVM parser, it then goes into the metadata table
       -- and updates function entries to point to subprograms. Is that
       -- neccessary for us?
@@ -714,7 +713,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       dilbf      <- getCompose $ DILexicalBlockFile -- Composing (Parse . Maybe)
         <$$> (mdForwardRefOrNull cxt mt <$> parseField r 1 numeric)
         <<*> (mdForwardRefOrNull cxt mt <$> parseField r 2 numeric) -- dilbfFile
-        <<*> (parseField r 3 numeric)                               -- dilbfDiscriminator
+        <<*> parseField r 3 numeric                               -- dilbfDiscriminator
 
       case dilbf of
         Just dilbf' ->
@@ -758,7 +757,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       cxt        <- getContext
       isDistinct <- parseField r 0 nonzero
       ditvp      <- DITemplateValueParameter
-        <$> (                           parseField r 1 numeric) -- ditvpTag
+        <$> parseField r 1 numeric -- ditvpTag
         <*> (mdStringOrNull cxt pm  <$> parseField r 2 numeric) -- ditvpName
         <*> (mdForwardRefOrNull cxt mt <$> parseField r 3 numeric) -- ditvpName
         <*> (mdForwardRef cxt mt    <$> parseField r 4 numeric) -- ditvpValue
@@ -832,8 +831,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
       diExpr     <- DebugInfoExpression . DIExpression <$> parseFields r 1 numeric
       return $! updateMetadataTable (addDebugInfo isDistinct diExpr) pm
 
-    30 -> label "METADATA_OBJC_PROPERTY" $ do
-      -- TODO
+    30 -> label "METADATA_OBJC_PROPERTY" $
       fail "not yet implemented"
 
     31 -> label "METADATA_IMPORTED_ENTITY" $ do
@@ -908,7 +906,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
 
       valueId <- parseField r 0 numeric
       sym     <- case lookupValueTableAbs valueId vt of
-                  Just (Typed { typedValue = ValSymbol sym }) -> return sym
+                  Just Typed { typedValue = ValSymbol sym } -> return sym
                   _ -> fail "Non-global referenced"
 
       refs <- parseGlobalObjectAttachment mt r
@@ -937,7 +935,7 @@ parseMetadataEntry vt mt pm (fromEntry -> Just r) =
 
     -- In the llvm source, this node is processed when the INDEX_OFFSET record is
     -- found.
-    39 -> label "METADATA_INDEX" $ do
+    39 -> label "METADATA_INDEX" $
       -- TODO: is it OK to skip this if we always parse everything?
       return pm
 

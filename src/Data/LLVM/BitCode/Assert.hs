@@ -24,8 +24,7 @@ module Data.LLVM.BitCode.Assert
   , ptrTo
   ) where
 
-import           Control.Monad (MonadPlus, mplus)
-import           Control.Monad (when)
+import           Control.Monad (MonadPlus, mplus, when, unless)
 import           Control.Monad.Fail (MonadFail)
 import           Data.LLVM.BitCode.Record (Record)
 import qualified Data.LLVM.BitCode.Record as Record
@@ -52,7 +51,7 @@ unknownEntity sort val = failWithMsg ("Unknown " ++ sort ++ " " ++ show val)
 recordSizeCmp :: MonadFail m => String -> (Int -> Bool) -> Record -> m ()
 recordSizeCmp msg compare_ record =
   let len = length (Record.recordFields record)
-  in when (compare_ len) $ failWithMsg $ unlines $
+  in when (compare_ len) $ failWithMsg $ unlines
        [ "Invalid record size: " ++ show len, msg ]
 
 recordSizeLess :: MonadFail m => Record -> Int -> m ()
@@ -68,7 +67,7 @@ recordSizeBetween record lb ub =
 recordSizeIn :: MonadFail m => Record -> [Int] -> m ()
 recordSizeIn record ns =
   let len = length (Record.recordFields record)
-  in when (not (len `elem` ns)) $ failWithMsg $ unlines $
+  in unless (len `elem` ns) $ failWithMsg $ unlines
        [ "Invalid record size: " ++ show len
        , "Expected one of: " ++ show ns
        ]
@@ -80,7 +79,7 @@ recordSizeIn record ns =
 -- | Assert that this thing is a pointer, get the underlying type
 elimPtrTo :: (MonadFail m, MonadPlus m) => String -> Type' Ident -> m (Type' Ident)
 elimPtrTo msg ptrTy = AST.elimPtrTo ptrTy `mplus`
-                        (fail $ unlines [ msg
+                        fail (unlines [ msg
                                         , "Expected pointer type, found:"
                                         , show ptrTy
                                         ])
@@ -98,7 +97,7 @@ ptrTo :: (MonadFail m, Show a, Show b)
       -> Typed a -- ^ The pointer
       -> Typed b -- ^ The value
       -> m ()
-ptrTo sig ptr val = do
+ptrTo sig ptr val =
   case AST.typedType ptr of
     AST.PtrTo ptrTo_ ->
       when (AST.typedType val /= ptrTo_) $ fail $ unlines
@@ -112,7 +111,7 @@ ptrTo sig ptr val = do
         , "Value value:   " ++ show (AST.typedValue val)
         ]
     ty ->
-      fail $ unlines $
+      fail $ unlines
         [ "Instruction expected a pointer argument."
         , "Instruction signature: " ++ sig
         , "Argument type: " ++ show ty

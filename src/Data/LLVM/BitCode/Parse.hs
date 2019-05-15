@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TypeSynonymInstances #-}
+
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -145,9 +145,8 @@ setRelIds b = Parse $ do
   put $! ps { psValueTable = (psValueTable ps) { valueRelIds = b }}
 
 getRelIds :: Parse Bool
-getRelIds  = Parse $ do
-  ps <- get
-  return (valueRelIds (psValueTable ps))
+getRelIds  = Parse $
+  valueRelIds . psValueTable <$> get
 
 getLastLoc :: Parse PDebugLoc
 getLastLoc  = Parse $ do
@@ -162,7 +161,7 @@ setModVersion v = Parse $ do
   put $! ps { psModVersion = v }
 
 getModVersion :: Parse Int
-getModVersion = Parse $ do
+getModVersion = Parse $
   psModVersion <$> get
 
 -- | Sort of a hack to preserve state between function body parses.  It would
@@ -489,7 +488,7 @@ addLabel :: String -> Env -> Env
 addLabel l env = env { envContext = l : envContext env }
 
 getContext :: Parse [String]
-getContext  = Parse (envContext `fmap` ask)
+getContext  = Parse (asks envContext)
 
 
 data Symtab = Symtab
@@ -512,7 +511,7 @@ instance Monoid Symtab where
   mappend = (<>)
 
 withSymtab :: Symtab -> Parse a -> Parse a
-withSymtab symtab body = Parse $ do
+withSymtab symtab body = Parse $
   local (extendSymtab symtab) (unParse body)
 
 -- | Run a computation with an extended value symbol table.
@@ -521,7 +520,7 @@ withValueSymtab symtab = withSymtab (mempty { symValueSymtab = symtab })
 
 -- | Retrieve the value symbol table.
 getValueSymtab :: Finalize ValueSymtab
-getValueSymtab = Finalize (symValueSymtab . envSymtab <$> ask)
+getValueSymtab = Finalize (asks (symValueSymtab . envSymtab))
 
 -- | Run a computation with an extended type symbol table.
 withTypeSymtab :: TypeSymtab -> Parse a -> Parse a
@@ -529,11 +528,11 @@ withTypeSymtab symtab = withSymtab (mempty { symTypeSymtab = symtab })
 
 -- | Retrieve the type symbol table.
 getTypeSymtab :: Parse TypeSymtab
-getTypeSymtab  = Parse (symTypeSymtab . envSymtab <$> ask)
+getTypeSymtab  = Parse (asks (symTypeSymtab . envSymtab))
 
 -- | Label a sub-computation with its context.
 label :: String -> Parse a -> Parse a
-label l m = Parse $ do
+label l m = Parse $
   local (addLabel l) (unParse m)
 
 -- | Fail, taking into account the current context.

@@ -1,4 +1,4 @@
-{-# LANGUAGE ViewPatterns #-}
+
 
 module Data.LLVM.BitCode.IR.Globals where
 
@@ -47,13 +47,13 @@ parseGlobalVar n r = label "GLOBALVAR" $ do
   mbAlign <- if length (recordFields r) > (4 + offset)
                 then Just `fmap` field 4 numeric
                 else return Nothing
-  vis <- if length (recordFields r) > (6 + offset) && not (link `elem` [Internal, Private])
+  vis <- if length (recordFields r) > (6 + offset) && notElem link [Internal, Private]
                 then field 6 visibility
                 else pure DefaultVisibility
 
   ty <- if explicitTy
            then return ptrty
-           else elimPtrTo ptrty `mplus` (fail $ "Invalid type for value: " ++ show ptrty)
+           else elimPtrTo ptrty `mplus` fail ("Invalid type for value: " ++ show ptrty)
 
   _       <- pushValue (Typed (PtrTo ty) (ValSymbol name))
   let valid | initid == 0 = Nothing
