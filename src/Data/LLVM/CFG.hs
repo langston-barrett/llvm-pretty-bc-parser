@@ -1,14 +1,11 @@
-{- |
-Module           : $Header$
+{- | Module           : $Header$
 Description      : LLVM control flow graphs and related utilities
 Stability        : provisional
 Point-of-contact : jstanley
 -}
 {-# LANGUAGE BangPatterns                #-}
-{-# LANGUAGE EmptyDataDecls              #-}
 {-# LANGUAGE OverloadedStrings           #-}
 {-# LANGUAGE ScopedTypeVariables         #-}
-{-# LANGUAGE ViewPatterns                #-}
 {-# LANGUAGE CPP                         #-}
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
@@ -33,6 +30,7 @@ import           Data.Functor.Identity (runIdentity)
 import qualified Data.Graph.Inductive.Query.Dominators as Dom
 import qualified Data.Graph.Inductive                  as G
 import qualified Data.Map                              as M
+import           Data.Maybe (fromMaybe)
 
 import           Text.LLVM                             hiding (BB)
 import qualified Text.LLVM.Labels                      as L
@@ -111,14 +109,14 @@ buildCFG bs = cfg
           , allBBs   = getBBs gr (G.nodes gr)
 
           , bbById   = \(BBId x) ->
-                       case bbFromCtx <$> fst (G.match x gr) of
-                         Nothing -> error "buildCFG: bbById: invalid BBId"
-                         Just bb -> bb
+                         case fst (G.match x gr) of
+                           Just v -> bbFromCtx v
+                           Nothing -> error "buildCFG: bbById: invalid BBId"
 
           , asId     = \ident ->
-                       case BBId <$> M.lookup ident nodeByName of
+                       case M.lookup ident nodeByName of
                          Nothing   -> error "buildCFG: asId: invalid ident"
-                         Just bbid -> bbid
+                         Just bbid -> BBId bbid
 
           , asName   = \bbid              -> blockName $ bbById cfg bbid
           , bbPreds  = \(BBId x)          -> BBId <$> G.pre gr x
@@ -134,7 +132,7 @@ buildCFG bs = cfg
     cdom g (BBId root)    = (Dom.dom g root, Dom.iDom g root)
     (domInfo, idomInfo)   = cdom gr          (entryId cfg)
     (pdomInfo, ipdomInfo) = cdom (G.grev gr) (exitId cfg)
-    lkupDom info x y      = maybe False id (elem x <$> lookup y info)
+    lkupDom info x y      = maybe False (elem x) (lookup y info)
 
     -- Graph construction
     (exit, gr)    = stitchDummyExit lab (G.mkGraph nodes' edges')
@@ -189,9 +187,9 @@ u `to` v = (u, v, ())
 
 requireLabel :: BB -> (BBId, BlockLabel)
 requireLabel bb =
-  case bbLabel bb of
-    Just lab -> lab
-    Nothing  -> error ("requireLabel: basic block without a label\n" ++ show bb)
+  fromMaybe
+    (error ("requireLabel: basic block without a label\n" ++ show bb))
+    (bbLabel bb)
 
 blockId :: BB -> BBId
 blockId = fst . requireLabel
@@ -204,9 +202,9 @@ nodeId = unBBId . blockId
 
 getBBs :: G.Gr BB () -> [G.Node] -> [BB]
 getBBs gr ns =
-  case mapM (G.lab gr) ns of
-    Just bbs -> bbs
-    Nothing  -> error "internal: encountered unlabeled node"
+  fromMaybe
+    (error "internal: encountered unlabeled node")
+    (mapM (G.lab gr) ns)
 
 newNode :: G.Graph gr => gr a b -> G.Node
 newNode = head . G.newNodes 1
@@ -228,7 +226,7 @@ stitchDummyExit exitLabelF gr = case exitNodes gr of
   exits ->
     let new = newNode gr
         !g0 = G.insNode (new, exitLabelF new) gr
-        !g1 = foldr G.insEdge g0 $ map (`to` new) exits
+        !g1 = foldr (G.insEdge . (`to` new)) g0 exits
     in (Right new, g1)
 
 instance Show CFG where

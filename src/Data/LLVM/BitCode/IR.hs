@@ -1,6 +1,7 @@
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Data.LLVM.BitCode.IR where
 
@@ -31,8 +32,8 @@ parseModule Bitstream { bsAppMagic, bsEntries } = label "Bitstream" $ do
   parseTopLevel bsEntries
 
 findTables :: [Entry] -> Parse ()
-findTables es = forM_ es $ \e ->
-  case e of
+findTables es = forM_ es $
+  \case
     (strtabBlockId -> Just [ abbrevDef -> Just _
                            , abbrev -> Just (fromAbbrev -> Just r)
                            ]) -> do

@@ -1,0 +1,39 @@
+# HLint configuration file
+# https://github.com/ndmitchell/hlint
+##########################
+
+- modules:
+  - {name: [Data.Set, Data.HashSet], as: Set} # if you import Data.Set qualified, it must be as 'Set'
+  - {name: [Data.List], as: List}
+  - {name: [Data.Sequence], as: Seq}
+
+# Add custom hints for this project
+#
+# Will suggest replacing "wibbleMany [myvar]" with "wibbleOne myvar"
+# - error: {lhs: "wibbleMany [x]", rhs: wibbleOne x}
+
+- ignore: {name: Reduce duplication}
+- ignore: {name: Eta reduce}
+- ignore: {name: Use tuple-section}
+- ignore:
+    name: Redundant do
+    within:
+      - Data.LLVM.BitCode.IR.Module
+      - Data.LLVM.BitCode.IR.Metadata
+- ignore:
+    name: Redundant $
+    within:
+      - Data.LLVM.BitCode.IR.Constants
+- ignore:
+    name: Use fewer imports
+    within:
+      - Data.LLVM.BitCode.IR.Constants
+- ignore:
+    name: Use newtype instead of data
+    within:
+      - Data.LLVM.BitCode.Parse
+      - Data.LLVM.BitCode.Bitstream
+- ignore:
+    name: Avoid lambda
+    within:
+      - Data.LLVM.CFG

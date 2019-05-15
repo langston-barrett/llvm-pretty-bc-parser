@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 module Data.LLVM.BitCode.GetBits (
     GetBits
   , runGetBits
@@ -119,23 +120,26 @@ getByteString n = do
 
 -- | Read zeros up to an alignment of 32-bits.
 align32bits :: GetBits ()
-align32bits  = GetBits $ \ off -> case off of
-  Aligned     -> return ((),Aligned)
-  SubWord _ 0 -> return ((),Aligned)
-  SubWord _ _ -> fail "alignment padding was not zeros"
+align32bits  = GetBits $
+  \case
+    Aligned     -> return ((),Aligned)
+    SubWord _ 0 -> return ((),Aligned)
+    SubWord _ _ -> fail "alignment padding was not zeros"
 
 -- | Read out n bits as a @BitString@.
 fixed :: Int -> GetBits BitString
-fixed n = GetBits $ \ off -> case off of
-  Aligned     -> getBitString n
-  SubWord l w -> getBitStringPartial n l w
+fixed n = GetBits $
+  \case
+    Aligned     -> getBitString n
+    SubWord l w -> getBitStringPartial n l w
 
 -- | Read out n bytes as a @ByteString@, aligning to a 32-bit boundary before and after.
 bytestring :: Int -> GetBits ByteString
-bytestring n = GetBits $ \ off -> case off of
-  Aligned     -> getByteString n
-  SubWord _ 0 -> getByteString n
-  SubWord _ _ -> fail "alignment padding was not zeros"
+bytestring n = GetBits $
+  \case
+    Aligned     -> getByteString n
+    SubWord _ 0 -> getByteString n
+    SubWord _ _ -> fail "alignment padding was not zeros"
 
 -- | Add a label to the error tag stack.
 label :: String -> GetBits a -> GetBits a

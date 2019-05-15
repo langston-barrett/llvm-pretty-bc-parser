@@ -437,7 +437,10 @@ parseConstantEntry _ _ e =
 parseCeGep :: Bool -> Maybe Word64 -> ValueTable -> Record -> Parse PValue
 parseCeGep isInbounds mInrangeIdx t r = do
   let isExplicit = odd (length (recordFields r)) -- TODO: is this right for INRANGE_INDEX?
-      firstIdx = if isJust mInrangeIdx then 2 else if isExplicit then 1 else 0
+      firstIdx
+        | isJust mInrangeIdx = 2
+        | isExplicit         = 1
+        | otherwise          = 0
       field = parseField r
       loop n = do
         ty   <- getType =<< field  n    numeric

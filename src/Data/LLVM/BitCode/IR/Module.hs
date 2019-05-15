@@ -141,12 +141,12 @@ parseModuleBlockEntry pm (functionBlockId -> Just es) = label "FUNCTION_BLOCK_ID
             , partialUnnamedMd = partialGlobalMd def ++ partialUnnamedMd pm
             }
 
-parseModuleBlockEntry pm (paramattrBlockId -> Just _) = do
+parseModuleBlockEntry pm (paramattrBlockId -> Just _) =
   -- PARAMATTR_BLOCK_ID
   -- TODO: skip for now
   return pm
 
-parseModuleBlockEntry pm (paramattrGroupBlockId -> Just _) = do
+parseModuleBlockEntry pm (paramattrGroupBlockId -> Just _) =
   -- PARAMATTR_GROUP_BLOCK_ID
   -- TODO: skip for now
   return pm
@@ -160,13 +160,13 @@ parseModuleBlockEntry pm (metadataBlockId -> Just es) = label "METADATA_BLOCK_ID
     , partialUnnamedMd = partialUnnamedMd pm ++ gs
     }
 
-parseModuleBlockEntry pm (valueSymtabBlockId -> Just _es) = do
+parseModuleBlockEntry pm (valueSymtabBlockId -> Just _es) =
   -- VALUE_SYMTAB_BLOCK_ID
   -- NOTE: we parse the value symbol table eagerly at the beginning of the
   -- MODULE_BLOCK
   return pm
 
-parseModuleBlockEntry pm (moduleCodeTriple -> Just _) = do
+parseModuleBlockEntry pm (moduleCodeTriple -> Just _) =
   -- MODULE_CODE_TRIPLE
   return pm
 
@@ -182,7 +182,7 @@ parseModuleBlockEntry pm (moduleCodeAsm -> Just r) = do
   asm <- UTF8.decode <$> parseFields r 0 char
   return pm { partialInlineAsm = lines asm }
 
-parseModuleBlockEntry pm (abbrevDef -> Just _) = do
+parseModuleBlockEntry pm (abbrevDef -> Just _) =
   -- skip abbreviation definitions
   return pm
 
@@ -228,7 +228,7 @@ parseModuleBlockEntry pm (moduleCodeComdat -> Just r) = do
   -- removed.
   return pm
 
-parseModuleBlockEntry pm (moduleCodeVSTOffset -> Just _) = do
+parseModuleBlockEntry pm (moduleCodeVSTOffset -> Just _) =
   -- MODULE_CODE_VSTOFFSET
   -- TODO: should we handle this?
   return pm
@@ -240,40 +240,40 @@ parseModuleBlockEntry pm (moduleCodeAliasNew -> Just r) = label "MODULE_CODE_ALI
     , partialAliases = partialAliases pm Seq.|> pa
     }
 
-parseModuleBlockEntry pm (moduleCodeMDValsUnused -> Just _) = do
+parseModuleBlockEntry pm (moduleCodeMDValsUnused -> Just _) =
   -- MODULE_CODE_METADATA_VALUES_UNUSED
   return pm
 
 parseModuleBlockEntry pm (moduleCodeSourceFilename -> Just r) = do
   -- MODULE_CODE_SOURCE_FILENAME
-  do str <- parseField r 0 cstring
-     return pm { partialSourceName = Just str }
+  str <- parseField r 0 cstring
+  return pm { partialSourceName = Just str }
 
-parseModuleBlockEntry pm (moduleCodeHash -> Just _) = do
+parseModuleBlockEntry pm (moduleCodeHash -> Just _) =
   -- MODULE_CODE_HASH
   -- It should be safe to ignore this for now.
   --fail "MODULE_CODE_HASH"
   return pm
 
-parseModuleBlockEntry _ (moduleCodeIFunc -> Just _) = do
+parseModuleBlockEntry _ (moduleCodeIFunc -> Just _) =
   -- MODULE_CODE_IFUNC
   fail "MODULE_CODE_IFUNC"
 
-parseModuleBlockEntry pm (uselistBlockId -> Just _) = do
+parseModuleBlockEntry pm (uselistBlockId -> Just _) =
   -- USELIST_BLOCK_ID
   -- XXX ?? fail "USELIST_BLOCK_ID"
   return pm
 
-parseModuleBlockEntry _ (moduleStrtabBlockId -> Just _) = do
+parseModuleBlockEntry _ (moduleStrtabBlockId -> Just _) =
   -- MODULE_STRTAB_BLOCK_ID
   fail "MODULE_STRTAB_BLOCK_ID"
 
-parseModuleBlockEntry pm (globalvalSummaryBlockId -> Just _) = do
+parseModuleBlockEntry pm (globalvalSummaryBlockId -> Just _) =
   -- GLOBALVAL_SUMMARY_BLOCK_ID
   -- It should be safe to ignore this for now.
   return pm
 
-parseModuleBlockEntry pm (operandBundleTagsBlockId -> Just _) = do
+parseModuleBlockEntry pm (operandBundleTagsBlockId -> Just _) =
   -- OPERAND_BUNDLE_TAGS_BLOCK_ID
   -- fail "OPERAND_BUNDLE_TAGS_BLOCK_ID"
   return pm
@@ -300,7 +300,7 @@ parseModuleBlockEntry pm (symtabBlockId -> Just [symtabBlobId -> Just _]) =
   return pm
 
 parseModuleBlockEntry pm (syncScopeNamesBlockId -> Just _) =
-  label "SYNC_SCOPE_NAMES_BLOCK_ID" $ do
+  label "SYNC_SCOPE_NAMES_BLOCK_ID" $
     -- TODO: record this information somewhere
     return pm
 
